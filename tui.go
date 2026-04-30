@@ -12,25 +12,27 @@ import (
 )
 
 var (
-	accentColor    = lipgloss.Color("63")
-	greenColor     = lipgloss.Color("42")
-	redColor       = lipgloss.Color("196")
-	dimColor       = lipgloss.Color("241")
-	sparkUpColor   = lipgloss.Color("39")
-	sparkDownColor = lipgloss.Color("78")
-	headerColor    = lipgloss.Color("255")
-	yellowColor    = lipgloss.Color("220")
+	outColor    = lipgloss.Color("39")
+	inColor     = lipgloss.Color("78")
+	redColor    = lipgloss.Color("196")
+	dimColor    = lipgloss.Color("241")
+	headerColor = lipgloss.Color("255")
+	yellowColor = lipgloss.Color("220")
+	greenColor  = lipgloss.Color("42")
+	activeColor = lipgloss.Color("220")
 
 	headerStyle = lipgloss.NewStyle().Bold(true).Foreground(headerColor)
 	dimStyle    = lipgloss.NewStyle().Foreground(dimColor)
-	accentStyle = lipgloss.NewStyle().Foreground(accentColor)
+	outStyle    = lipgloss.NewStyle().Foreground(outColor)
+	inStyle     = lipgloss.NewStyle().Foreground(inColor)
 	greenStyle  = lipgloss.NewStyle().Foreground(greenColor)
 	redStyle    = lipgloss.NewStyle().Foreground(redColor)
 	yellowStyle = lipgloss.NewStyle().Foreground(yellowColor)
+	activeStyle = lipgloss.NewStyle().Foreground(activeColor)
 
 	sectionTitle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(accentColor).
+			Foreground(outColor).
 			PaddingLeft(1)
 
 	portStyle = lipgloss.NewStyle().
@@ -40,7 +42,7 @@ var (
 type logEntry struct {
 	Time      time.Time
 	Message   string
-	Direction string // "→" outbound, "←" inbound
+	Direction string
 }
 
 type transferEntry struct {
@@ -80,10 +82,10 @@ type model struct {
 	width  int
 	height int
 
-	connEvents       <-chan ConnEventMsg
-	portEvents       <-chan PortEventMsg
-	transferEvents   <-chan TransferDoneMsg
-	throughputEvents <-chan ThroughputMsg
+	connEvents        <-chan ConnEventMsg
+	portEvents        <-chan PortEventMsg
+	transferEvents    <-chan TransferDoneMsg
+	throughputEvents  <-chan ThroughputMsg
 	portTrafficEvents <-chan PortTrafficMsg
 }
 
@@ -94,14 +96,6 @@ func newModel(cfg *Config, conn *Connection, scanner *PortScanner, transferer *T
 	localName, _ := os.Hostname()
 	if localName == "" {
 		localName = "local"
-	}
-
-	remoteHost := conn.host
-	if at := strings.Index(remoteHost, "@"); at >= 0 {
-		remoteHost = remoteHost[at+1:]
-	}
-	if colon := strings.Index(remoteHost, ":"); colon >= 0 {
-		remoteHost = remoteHost[:colon]
 	}
 
 	return model{
@@ -339,9 +333,9 @@ func (m *model) updateViewport() {
 		ts := dimStyle.Render(e.Time.Format("15:04:05"))
 		dir := dimStyle.Render(e.Direction)
 		if e.Direction == "→" {
-			dir = greenStyle.Render("→")
+			dir = outStyle.Render("→")
 		} else if e.Direction == "←" {
-			dir = accentStyle.Render("←")
+			dir = inStyle.Render("←")
 		} else if e.Direction == "✕" {
 			dir = redStyle.Render("✕")
 		}
@@ -358,11 +352,11 @@ func (m *model) recalcLayout() {
 	if bottomHeight < 4 {
 		bottomHeight = 4
 	}
-	logWidth := (m.width / 3) - 2
-	if logWidth < 20 {
-		logWidth = 20
+	activityWidth := (m.width * 2 / 3) - 1
+	if activityWidth < 30 {
+		activityWidth = 30
 	}
-	m.logViewport.Width = logWidth
+	m.logViewport.Width = activityWidth
 	m.logViewport.Height = bottomHeight - 1
 	m.updateViewport()
 }
@@ -402,9 +396,9 @@ func (m model) renderHeader() string {
 	host := dimStyle.Render(m.host)
 	up := dimStyle.Render(uptime)
 
-	reconnLabel := greenStyle.Render("auto-reconnect on")
+	reconnLabel := greenStyle.Render("🔗 auto-reconnect")
 	if !m.autoReconnect {
-		reconnLabel = yellowStyle.Render("auto-reconnect off")
+		reconnLabel = yellowStyle.Render("⚡ auto-reconnect off")
 	}
 
 	leftPart := left + " ── " + host + up
@@ -426,22 +420,26 @@ func (m model) renderNetwork() string {
 	upRate := formatBytes(lastSample(m.uploadSamples))
 	downRate := formatBytes(lastSample(m.downloadSamples))
 
-	upSpark := lipgloss.NewStyle().Foreground(sparkUpColor).Render(
+	upSpark := lipgloss.NewStyle().Foreground(outColor).Render(
 		renderSparkline(m.uploadSamples, sparkWidth))
-	downSpark := lipgloss.NewStyle().Foreground(sparkDownColor).Render(
+	downSpark := lipgloss.NewStyle().Foreground(inColor).Render(
 		renderSparkline(m.downloadSamples, sparkWidth))
 
 	header := sectionTitle.Render("NETWORK")
-	up := portStyle.Render(fmt.Sprintf("↑ %8s %s", upRate, upSpark))
-	down := portStyle.Render(fmt.Sprintf("↓ %8s %s", downRate, downSpark))
+	upLine := portStyle.Render(fmt.Sprintf("%s %8s %s", outStyle.Render("↑"), upRate, upSpark))
+	downLine := portStyle.Render(fmt.Sprintf("%s %8s %s", inStyle.Render("↓"), downRate, downSpark))
 
-	return header + "\n" + up + "\n" + down
+	return header + "\n" + upLine + "\n" + downLine
 }
 
 func (m model) renderBottomPanes() string {
-	colWidth := m.width / 3
-	if colWidth < 20 {
-		colWidth = 20
+	activityWidth := m.width * 2 / 3
+	portsWidth := m.width - activityWidth
+	if activityWidth < 30 {
+		activityWidth = 30
+	}
+	if portsWidth < 20 {
+		portsWidth = 20
 	}
 
 	bottomHeight := m.height - 8
@@ -449,17 +447,26 @@ func (m model) renderBottomPanes() string {
 		bottomHeight = 4
 	}
 
-	activity := m.renderActivity(colWidth, bottomHeight)
-	localPorts := m.renderLocalPorts(colWidth, bottomHeight)
-	remotePorts := m.renderRemotePorts(colWidth, bottomHeight)
+	activity := m.renderActivity(activityWidth, bottomHeight)
+	ports := m.renderPortsColumn(portsWidth, bottomHeight)
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, activity, localPorts, remotePorts)
+	return lipgloss.JoinHorizontal(lipgloss.Top, activity, ports)
 }
 
 func (m model) renderActivity(width, height int) string {
 	header := sectionTitle.Render("ACTIVITY")
 	content := header + "\n" + m.logViewport.View()
 	return lipgloss.NewStyle().Width(width).Height(height).Render(content)
+}
+
+func (m model) renderPortsColumn(width, height int) string {
+	localHeight := height / 2
+	remoteHeight := height - localHeight
+
+	local := m.renderLocalPorts(width, localHeight)
+	remote := m.renderRemotePorts(width, remoteHeight)
+
+	return lipgloss.JoinVertical(lipgloss.Left, local, remote)
 }
 
 func (m model) renderLocalPorts(width, height int) string {
@@ -469,22 +476,29 @@ func (m model) renderLocalPorts(width, height int) string {
 		lines = append(lines, portStyle.Render(dimStyle.Render("scanning...")))
 	}
 	for _, p := range m.localForwards {
-		port := greenStyle.Render(fmt.Sprintf(":%d", p.Port))
-		proc := p.Process
-		if proc == "" {
-			proc = "(unknown)"
-		}
-		proc = dimStyle.Render(proc)
-
+		hasTraffic := false
 		traffic := ""
 		if t, ok := m.portTraffic[p.Port]; ok {
 			total := t.Upload + t.Download
 			if total > 0 {
+				hasTraffic = true
 				traffic = " " + dimStyle.Render(formatBytes(total))
 			}
 		}
 
-		lines = append(lines, portStyle.Render(fmt.Sprintf("→ %s  %s%s", port, proc, traffic)))
+		portStr := fmt.Sprintf(":%d", p.Port)
+		proc := p.Process
+		if proc == "" {
+			proc = "(unknown)"
+		}
+
+		if hasTraffic {
+			port := activeStyle.Render(portStr)
+			lines = append(lines, portStyle.Render(fmt.Sprintf("%s %s  %s%s", outStyle.Render("→"), port, dimStyle.Render(proc), traffic)))
+		} else {
+			port := outStyle.Render(portStr)
+			lines = append(lines, portStyle.Render(fmt.Sprintf("%s %s  %s", outStyle.Render("→"), port, dimStyle.Render(proc))))
+		}
 	}
 
 	content := header + "\n" + strings.Join(lines, "\n")
@@ -498,9 +512,9 @@ func (m model) renderRemotePorts(width, height int) string {
 		lines = append(lines, portStyle.Render(dimStyle.Render("none")))
 	}
 	for _, p := range m.reverseTunnels {
-		port := accentStyle.Render(fmt.Sprintf(":%d", p.Port))
+		port := inStyle.Render(fmt.Sprintf(":%d", p.Port))
 		proc := dimStyle.Render(p.Process)
-		lines = append(lines, portStyle.Render(fmt.Sprintf("← %s  %s", port, proc)))
+		lines = append(lines, portStyle.Render(fmt.Sprintf("%s %s  %s", inStyle.Render("←"), port, proc)))
 	}
 
 	content := header + "\n" + strings.Join(lines, "\n")
@@ -509,8 +523,8 @@ func (m model) renderRemotePorts(width, height int) string {
 
 func (m model) renderFooter() string {
 	if m.sendMode {
-		cursor := accentStyle.Render("█")
-		return "  " + accentStyle.Render("send:") + " " + m.sendInput + cursor + "  " + dimStyle.Render("enter send  esc cancel")
+		cursor := outStyle.Render("█")
+		return "  " + outStyle.Render("send:") + " " + m.sendInput + cursor + "  " + dimStyle.Render("enter send  esc cancel")
 	}
 	return dimStyle.Render("  ↑↓ scroll  r reconnect  s send  q quit")
 }
