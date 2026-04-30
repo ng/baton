@@ -1,3 +1,4 @@
-baton
-baton-*
+/baton
+/baton-*
 *.exe
+!cmd/

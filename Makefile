@@ -1,4 +1,4 @@
-.PHONY: build build-mac build-linux clean
+.PHONY: build build-mac build-mac-intel build-linux build-tray build-all test clean install-remote
 
 BINARY := baton
 VERSION := 0.1.0
@@ -13,7 +13,15 @@ build-mac-intel:
 build-linux:
 	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BINARY)-linux-amd64 .
 
+build-tray:
+	GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 go build $(LDFLAGS) -o $(BINARY)-tray-darwin-arm64 ./cmd/baton-tray/
+
 build: build-mac
+
+build-all: build-mac build-mac-intel build-linux build-tray
+
+test:
+	go test ./...
 
 clean:
 	rm -f $(BINARY)-*

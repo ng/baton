@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -83,6 +85,9 @@ type model struct {
 
 	fwdMode  bool
 	fwdInput string
+
+	pasteBuffer string
+	pasting     bool
 
 	userScrolled bool
 
@@ -197,6 +202,25 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if msg.Paste {
+			m.pasting = true
+			m.pasteBuffer += msg.String()
+			return m, nil
+		}
+		if m.pasting {
+			m.pasting = false
+			path := strings.TrimSpace(m.pasteBuffer)
+			m.pasteBuffer = ""
+			if looksLikeFilePath(path) {
+				m.addLog(time.Now(), "uploading "+filepath.Base(path)+"...", "→")
+				t := m.transferer
+				inbox := m.inboxPath
+				return m, func() tea.Msg {
+					_, err := t.Transfer(path, inbox)
+					return sendResultMsg{filename: path, err: err}
+				}
+			}
+		}
 		if m.sendMode {
 			return m.updateSendMode(msg)
 		}
@@ -248,7 +272,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ConnEventMsg:
 		dir := "←"
-		if strings.Contains(msg.Message, "reconnect") || strings.Contains(msg.Message, "lost") {
+		if strings.Contains(msg.Message, "connected to") {
+			dir = "🟢"
+		} else if strings.Contains(msg.Message, "reconnected") {
+			dir = "🟢"
+		} else if strings.Contains(msg.Message, "lost") {
+			dir = "🔴"
+		} else if strings.Contains(msg.Message, "reconnect") {
 			dir = "🔄"
 		}
 		m.addLog(msg.Time, msg.Message, dir)
@@ -406,16 +436,22 @@ func (m *model) updateViewport() {
 	for _, e := range m.logEntries {
 		ts := dimStyle.Render(e.Time.Format("15:04:05"))
 		dir := dimStyle.Render(e.Direction)
-		if e.Direction == "→" {
+		switch e.Direction {
+		case "→":
 			dir = outStyle.Render("→")
-		} else if e.Direction == "←" {
+		case "←":
 			dir = inStyle.Render("←")
-		} else if e.Direction == "🔄" {
+		case "🔄":
 			dir = yellowStyle.Render("🔄")
-		} else if e.Direction == "✕" {
+		case "🟢":
+			dir = "🟢"
+		case "🔴":
+			dir = "🔴"
+		case "✕":
 			dir = redStyle.Render("✕")
 		}
-		lines = append(lines, fmt.Sprintf("  %s %s %s", ts, dir, e.Message))
+		msg := colorizeLogMessage(e.Message)
+		lines = append(lines, fmt.Sprintf("  %s %s %s", ts, dir, msg))
 	}
 	content := strings.Join(lines, "\n")
 	m.logViewport.SetContent(content)
@@ -471,7 +507,7 @@ func (m model) renderHeader() string {
 	}
 
 	left := headerStyle.Render(" baton") + " " + dot + " " + dimStyle.Render(status)
-	host := dimStyle.Render(m.host)
+	host := outStyle.Render(m.host)
 	up := dimStyle.Render(uptime)
 
 	reconnLabel := greenStyle.Render("🔗 auto-reconnect")
@@ -631,6 +667,29 @@ func lastSample(samples []float64) float64 {
 		return 0
 	}
 	return samples[len(samples)-1]
+}
+
+var portNumberRe = regexp.MustCompile(`\b(port )?(\d{2,5})\b`)
+
+func colorizeLogMessage(msg string) string {
+	return portNumberRe.ReplaceAllStringFunc(msg, func(match string) string {
+		if strings.HasPrefix(match, "port ") {
+			num := strings.TrimPrefix(match, "port ")
+			return "port " + outStyle.Render(num)
+		}
+		return activeStyle.Render(match)
+	})
+}
+
+func looksLikeFilePath(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	if strings.HasPrefix(s, "/") || strings.HasPrefix(s, "~/") {
+		return !strings.Contains(s, "\n")
+	}
+	return false
 }
 
 func shortName(host string) string {

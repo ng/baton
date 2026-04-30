@@ -73,6 +73,7 @@ func (c *Connection) Start() error {
 		time.Sleep(200 * time.Millisecond)
 		if c.IsAlive() {
 			c.StartTime = time.Now()
+			os.WriteFile(c.cfg.Connection.ControlSocket+".host", []byte(c.host), 0644)
 			c.sendEvent("connected to " + c.host)
 			go c.watchAndReconnect()
 			return nil
@@ -101,6 +102,7 @@ func (c *Connection) Stop() error {
 	}
 	c.stopped = true
 	close(c.stopCh)
+	os.Remove(c.cfg.Connection.ControlSocket + ".host")
 
 	cmd := exec.Command("ssh",
 		"-S", c.cfg.Connection.ControlSocket,
