@@ -672,7 +672,7 @@ func (m model) renderHeader() string {
 	}
 
 	leftPart := left + " ── " + host + up
-	rightPart := reconnLabel + "  " + dimStyle.Render("q quit")
+	rightPart := reconnLabel
 	gap := m.width - lipgloss.Width(leftPart) - lipgloss.Width(rightPart)
 	if gap < 2 {
 		gap = 2
@@ -832,7 +832,7 @@ func (m model) renderFooter() string {
 		}
 		return "  " + headerStyle.Render(panel) + "  " + dimStyle.Render("↑↓ select  tab switch  d disconnect  esc back")
 	}
-	return dimStyle.Render("  ↑↓ scroll  tab ports  r reconnect  s send  f forward  t tray  q quit")
+	return dimStyle.Render("  ↑↓ scroll  tab ports  r reconnect  s send  f forward  t tray")
 }
 
 func formatDuration(d time.Duration) string {

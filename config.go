@@ -20,6 +20,7 @@ type ConnectionConfig struct {
 	Host          string `toml:"host"`
 	ReversePort   int    `toml:"reverse_port"`
 	ControlSocket string `toml:"control_socket"`
+	Preset        string `toml:"preset,omitempty"`
 }
 
 type TransferConfig struct {
@@ -48,6 +49,10 @@ func (d *duration) UnmarshalText(text []byte) error {
 	var err error
 	d.Duration, err = time.ParseDuration(string(text))
 	return err
+}
+
+func (d duration) MarshalText() ([]byte, error) {
+	return []byte(d.Duration.String()), nil
 }
 
 func DefaultConfig() *Config {
@@ -148,6 +153,12 @@ func (c *Config) EffectiveExtra(preset string) []int {
 		}
 	}
 	return result
+}
+
+func (c *Config) SaveSession(host, preset string) {
+	c.Connection.Host = host
+	c.Connection.Preset = preset
+	WriteConfig(c, ".baton.toml")
 }
 
 func (c *Config) EffectiveReverse(preset string) []int {

@@ -18,15 +18,17 @@ type Connection struct {
 	autoReconnect  bool
 	events         chan ConnEventMsg
 	StartTime      time.Time
+	reversePorts   []int
 }
 
-func NewConnection(cfg *Config, host string) *Connection {
+func NewConnection(cfg *Config, host string, reversePorts []int) *Connection {
 	return &Connection{
 		cfg:           cfg,
 		host:          host,
 		autoReconnect: true,
 		stopCh:        make(chan struct{}),
 		events:        make(chan ConnEventMsg, 32),
+		reversePorts:  reversePorts,
 	}
 }
 
@@ -56,11 +58,17 @@ func (c *Connection) Start() error {
 		"-N",
 		"-o", "ServerAliveInterval=15",
 		"-o", "ServerAliveCountMax=3",
-		"-o", "ExitOnForwardFailure=yes",
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-R", fmt.Sprintf("%d:localhost:22", c.cfg.Connection.ReversePort),
-		c.host,
 	}
+	for _, port := range c.reversePorts {
+		remotePort := port
+		if port == 443 {
+			remotePort = 4443
+		}
+		args = append(args, "-R", fmt.Sprintf("%d:localhost:%d", remotePort, port))
+	}
+	args = append(args, c.host)
 
 	c.cmd = exec.Command("ssh", args...)
 	c.cmd.Stderr = nil
@@ -244,10 +252,17 @@ func (c *Connection) reconnect() error {
 		"-N",
 		"-o", "ServerAliveInterval=15",
 		"-o", "ServerAliveCountMax=3",
-		"-o", "ExitOnForwardFailure=yes",
+		"-o", "StrictHostKeyChecking=accept-new",
 		"-R", fmt.Sprintf("%d:localhost:22", c.cfg.Connection.ReversePort),
-		c.host,
 	}
+	for _, port := range c.reversePorts {
+		remotePort := port
+		if port == 443 {
+			remotePort = 4443
+		}
+		args = append(args, "-R", fmt.Sprintf("%d:localhost:%d", remotePort, port))
+	}
+	args = append(args, c.host)
 
 	c.cmd = exec.Command("ssh", args...)
 	c.cmd.Stderr = nil

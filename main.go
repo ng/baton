@@ -25,19 +25,13 @@ func main() {
 
 	switch os.Args[1] {
 	case "connect":
-		if len(os.Args) < 3 && cfg.Connection.Host == "" {
-			fmt.Fprintln(os.Stderr, "usage: baton connect <host> [--preset <name>]")
-			os.Exit(1)
-		}
 		host := cfg.Connection.Host
-		preset := ""
+		preset := cfg.Connection.Preset
 		args := os.Args[2:]
 		for i := 0; i < len(args); i++ {
 			if args[i] == "--preset" && i+1 < len(args) {
 				preset = args[i+1]
 				i++
-			} else if !strings.HasPrefix(args[i], "-") && host == "" {
-				host = args[i]
 			} else if !strings.HasPrefix(args[i], "-") {
 				host = args[i]
 			}
@@ -46,6 +40,15 @@ func main() {
 			fmt.Fprintln(os.Stderr, "usage: baton connect <host> [--preset <name>]")
 			os.Exit(1)
 		}
+		restored := len(os.Args) < 3 && cfg.Connection.Host != ""
+		if restored {
+			fmt.Fprintf(os.Stderr, "restored from .baton.toml: %s", host)
+			if preset != "" {
+				fmt.Fprintf(os.Stderr, " (preset: %s)", preset)
+			}
+			fmt.Fprintln(os.Stderr)
+		}
+		cfg.SaveSession(host, preset)
 		runConnect(cfg, host, preset)
 
 	case "send":
@@ -102,8 +105,6 @@ Config: .baton.toml (local) or ~/.baton.toml
 }
 
 func runConnect(cfg *Config, host, preset string) {
-	conn := NewConnection(cfg, host)
-
 	if preset != "" {
 		if _, ok := cfg.Presets[preset]; !ok {
 			fmt.Fprintf(os.Stderr, "warning: unknown preset %q\n", preset)
@@ -112,6 +113,8 @@ func runConnect(cfg *Config, host, preset string) {
 
 	extraPorts := cfg.EffectiveExtra(preset)
 	reversePorts := cfg.EffectiveReverse(preset)
+
+	conn := NewConnection(cfg, host, reversePorts)
 
 	scanner := NewPortScanner(cfg, conn, extraPorts, nil)
 	transferer := NewTransferer(cfg)
@@ -133,10 +136,8 @@ func runConnect(cfg *Config, host, preset string) {
 			if port == 443 {
 				remotePort = 4443
 			}
-			if err := conn.ReverseForward(remotePort, port); err == nil {
-				reverseInfos = append(reverseInfos, PortInfo{Port: remotePort, Process: "preset"})
-				reverseRemotePorts = append(reverseRemotePorts, remotePort)
-			}
+			reverseInfos = append(reverseInfos, PortInfo{Port: remotePort, Process: "preset"})
+			reverseRemotePorts = append(reverseRemotePorts, remotePort)
 		}
 
 		scanner.AddExclusions(reverseRemotePorts)
@@ -160,7 +161,7 @@ func runConnect(cfg *Config, host, preset string) {
 }
 
 func runSend(cfg *Config, file, dest string) {
-	conn := NewConnection(cfg, cfg.Connection.Host)
+	conn := NewConnection(cfg, cfg.Connection.Host, nil)
 	if !conn.IsAlive() {
 		fmt.Fprintln(os.Stderr, "no active connection. run 'baton connect' first.")
 		os.Exit(1)
@@ -177,7 +178,7 @@ func runSend(cfg *Config, file, dest string) {
 }
 
 func runPorts(cfg *Config) {
-	conn := NewConnection(cfg, cfg.Connection.Host)
+	conn := NewConnection(cfg, cfg.Connection.Host, nil)
 	if !conn.IsAlive() {
 		fmt.Fprintln(os.Stderr, "no active connection.")
 		os.Exit(1)
@@ -231,7 +232,7 @@ func runInit() {
 }
 
 func runStatus(cfg *Config) {
-	conn := NewConnection(cfg, cfg.Connection.Host)
+	conn := NewConnection(cfg, cfg.Connection.Host, nil)
 	alive := conn.IsAlive()
 	if alive {
 		fmt.Printf("connected: %s\n", cfg.Connection.Host)
@@ -242,7 +243,7 @@ func runStatus(cfg *Config) {
 }
 
 func runDisconnect(cfg *Config) {
-	conn := NewConnection(cfg, cfg.Connection.Host)
+	conn := NewConnection(cfg, cfg.Connection.Host, nil)
 	if err := conn.Stop(); err != nil {
 		fmt.Fprintf(os.Stderr, "disconnect failed: %v\n", err)
 		os.Exit(1)

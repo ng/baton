@@ -78,13 +78,43 @@ chmod +x ~/bin/baton
 ### Connect
 
 ```bash
-baton connect workspace-id@gitpod.io
+# First time — pass host and preset
+baton connect workspace-id@gitpod.io --preset orchestra
+
+# Next time — just run connect (host + preset restored from .baton.toml)
+baton connect
 ```
 
-Starts three services over one multiplexed SSH connection:
-- **Reverse tunnel** (port 19222) for remote file pulling
+Starts over one multiplexed SSH connection:
+- **Reverse tunnels** push local services (MySQL, Caddy, etc.) to the remote
 - **Auto port forwarder** scanning remote ports every 3s
-- **Web UI** at `http://localhost:19876` for drag-and-drop uploads
+- **Reverse tunnel** (port 19222) for remote file pulling
+
+Settings are saved to `.baton.toml` on each connect, so subsequent runs don't need arguments.
+
+### Presets
+
+Presets define groups of reverse tunnels (local → remote). The built-in `orchestra` preset forwards:
+
+| Port | Service |
+|------|---------|
+| 443 (→4443) | Caddy entrypoint |
+| 3000 | portcullis-ui |
+| 3306 | MySQL |
+| 5432 | PostgreSQL |
+| 6007 | Storybook |
+| 8000 | data-service |
+| 9000 | portcullis-api |
+| 9010–9050 | microservices (protocoldescriber, entityresolver, etc.) |
+
+Custom presets can be defined in `.baton.toml`:
+
+```toml
+[presets.myapp]
+desc = "My app services"
+reverse = [3000, 5432, 8080]
+ports = [4200]
+```
 
 ### Send a file
 
@@ -153,11 +183,12 @@ Now when you drag a file from Finder into the terminal, the Mac path is intercep
 
 ## Configuration
 
-Create `~/.baton.toml`:
+Config is auto-saved to `.baton.toml` in the current directory on each connect. You can also create one manually:
 
 ```toml
 [connection]
 host = "workspace-id@gitpod.io"
+preset = "orchestra"
 reverse_port = 19222
 control_socket = "/tmp/baton.sock"
 
@@ -169,11 +200,12 @@ mac_user = "ngj49"
 scan_interval = "3s"
 exclude = [22, 19222]
 
-[web]
-port = 19876
+[presets.orchestra]
+desc = "Orchestra platform services"
+reverse = [443, 3000, 3306, 5432, 6007, 8000, 9000, 9010, 9020, 9030, 9040, 9050]
 ```
 
-All fields have sensible defaults — only `host` and `mac_user` are typically needed.
+Config lookup order: `.baton.toml` (current dir) → `~/.baton.toml` (home). The local file is gitignored.
 
 ## Environment Variables (Remote)
 
