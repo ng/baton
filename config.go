@@ -65,7 +65,7 @@ func DefaultConfig() *Config {
 		Presets: map[string]PortPreset{
 			"orchestra": {
 				Desc:  "Orchestra platform services",
-				Ports: []int{3000, 3306, 5432, 9000, 9010, 9020, 9030, 9040, 9050},
+				Ports: []int{443, 3000, 3306, 5432, 6007, 8000, 9000, 9010, 9020, 9030, 9040, 9050},
 			},
 		},
 	}

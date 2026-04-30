@@ -533,12 +533,13 @@ func (m model) renderNetwork() string {
 		sparkWidth = 10
 	}
 
-	upRate := formatBytes(lastSample(m.uploadSamples))
-	downRate := formatBytes(lastSample(m.downloadSamples))
+	// Remote TX = data to Mac (user's download), Remote RX = data from Mac (user's upload)
+	downRate := formatBytes(lastSample(m.uploadSamples))
+	upRate := formatBytes(lastSample(m.downloadSamples))
 
-	upSpark := lipgloss.NewStyle().Foreground(outColor).Render(
-		renderSparkline(m.uploadSamples, sparkWidth))
 	downSpark := lipgloss.NewStyle().Foreground(inColor).Render(
+		renderSparkline(m.uploadSamples, sparkWidth))
+	upSpark := lipgloss.NewStyle().Foreground(outColor).Render(
 		renderSparkline(m.downloadSamples, sparkWidth))
 
 	header := sectionTitle.Render("NETWORK")
@@ -576,17 +577,18 @@ func (m model) renderActivity(width, height int) string {
 }
 
 func (m model) renderPortsColumn(width, height int) string {
-	localHeight := height / 2
-	remoteHeight := height - localHeight
+	localHeight := (height - 1) / 2
+	remoteHeight := height - localHeight - 1
 
 	local := m.renderLocalPorts(width, localHeight)
 	remote := m.renderRemotePorts(width, remoteHeight)
 
-	return lipgloss.JoinVertical(lipgloss.Left, local, remote)
+	sep := dimStyle.Render(strings.Repeat("─", width))
+	return lipgloss.JoinVertical(lipgloss.Left, local, sep, remote)
 }
 
 func (m model) renderLocalPorts(width, height int) string {
-	header := sectionTitle.Render("REMOTE") + " " + dimStyle.Render(shortName(m.host))
+	header := sectionTitle.Render(shortName(m.host)) + " " + outStyle.Render("→") + " " + sectionTitle.Render(m.localHost)
 	var lines []string
 	if len(m.localForwards) == 0 {
 		lines = append(lines, portStyle.Render(dimStyle.Render("scanning...")))
@@ -622,7 +624,7 @@ func (m model) renderLocalPorts(width, height int) string {
 }
 
 func (m model) renderRemotePorts(width, height int) string {
-	header := sectionTitle.Render("LOCAL") + " " + dimStyle.Render(m.localHost)
+	header := sectionTitle.Render(m.localHost) + " " + inStyle.Render("→") + " " + sectionTitle.Render(shortName(m.host))
 	var lines []string
 	if len(m.reverseTunnels) == 0 {
 		lines = append(lines, portStyle.Render(dimStyle.Render("none")))
