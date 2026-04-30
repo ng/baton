@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -52,6 +53,7 @@ type transferEntry struct {
 type model struct {
 	connected   bool
 	host        string
+	localHost   string
 	connectedAt time.Time
 
 	autoReconnect bool
@@ -89,9 +91,23 @@ func newModel(cfg *Config, conn *Connection, scanner *PortScanner, transferer *T
 	vp := viewport.New(80, 10)
 	vp.SetContent("")
 
+	localName, _ := os.Hostname()
+	if localName == "" {
+		localName = "local"
+	}
+
+	remoteHost := conn.host
+	if at := strings.Index(remoteHost, "@"); at >= 0 {
+		remoteHost = remoteHost[at+1:]
+	}
+	if colon := strings.Index(remoteHost, ":"); colon >= 0 {
+		remoteHost = remoteHost[:colon]
+	}
+
 	return model{
 		connected:   true,
 		host:        conn.host,
+		localHost:   shortName(localName),
 		connectedAt: conn.StartTime,
 
 		autoReconnect: true,
@@ -447,7 +463,7 @@ func (m model) renderActivity(width, height int) string {
 }
 
 func (m model) renderLocalPorts(width, height int) string {
-	header := sectionTitle.Render("LOCAL → mac")
+	header := sectionTitle.Render(fmt.Sprintf("%s → %s", shortName(m.host), m.localHost))
 	var lines []string
 	if len(m.localForwards) == 0 {
 		lines = append(lines, portStyle.Render(dimStyle.Render("scanning...")))
@@ -476,7 +492,7 @@ func (m model) renderLocalPorts(width, height int) string {
 }
 
 func (m model) renderRemotePorts(width, height int) string {
-	header := sectionTitle.Render("REMOTE ← pod")
+	header := sectionTitle.Render(fmt.Sprintf("%s ← %s", m.localHost, shortName(m.host)))
 	var lines []string
 	if len(m.reverseTunnels) == 0 {
 		lines = append(lines, portStyle.Render(dimStyle.Render("none")))
@@ -519,4 +535,17 @@ func lastSample(samples []float64) float64 {
 		return 0
 	}
 	return samples[len(samples)-1]
+}
+
+func shortName(host string) string {
+	if at := strings.Index(host, "@"); at >= 0 {
+		host = host[at+1:]
+	}
+	if colon := strings.Index(host, ":"); colon >= 0 {
+		host = host[:colon]
+	}
+	if dot := strings.Index(host, "."); dot >= 0 {
+		host = host[:dot]
+	}
+	return host
 }
