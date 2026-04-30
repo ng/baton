@@ -30,9 +30,11 @@ var (
 	yellowStyle = lipgloss.NewStyle().Foreground(yellowColor)
 	activeStyle = lipgloss.NewStyle().Foreground(activeColor)
 
+	accentColor = lipgloss.Color("63")
+
 	sectionTitle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(outColor).
+			Foreground(accentColor).
 			PaddingLeft(1)
 
 	portStyle = lipgloss.NewStyle().
