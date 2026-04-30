@@ -70,19 +70,6 @@ func NewPortScanner(cfg *Config, conn *Connection, extraPorts []int, reverseRemo
 			continue
 		}
 		pinned[port] = true
-		label := cfg.PortLabel(preset, port)
-		if err := conn.Forward(port, port); err == nil {
-			ps.active[port] = PortInfo{Port: port, Label: label, Pinned: true}
-			ps.sendEvent(PortEventMsg{
-				Time:    time.Now(),
-				Port:    port,
-				Process: label,
-				Action:  "forwarded",
-			})
-		}
-	}
-	if len(ps.active) > 0 {
-		ps.saveState()
 	}
 	return ps
 }
@@ -95,7 +82,26 @@ func (ps *PortScanner) AddExclusions(ports []int) {
 	}
 }
 
+func (ps *PortScanner) forwardPinned() {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	for port := range ps.pinned {
+		label := ps.cfg.PortLabel(ps.preset, port)
+		if err := ps.conn.Forward(port, port); err == nil {
+			ps.active[port] = PortInfo{Port: port, Label: label, Pinned: true}
+			ps.saveState()
+			ps.sendEvent(PortEventMsg{
+				Time:    time.Now(),
+				Port:    port,
+				Process: label,
+				Action:  "forwarded",
+			})
+		}
+	}
+}
+
 func (ps *PortScanner) Run() {
+	ps.forwardPinned()
 	ps.scan()
 
 	ticker := time.NewTicker(ps.cfg.Ports.ScanInterval.Duration)

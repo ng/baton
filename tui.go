@@ -775,17 +775,18 @@ func (m model) renderLocalPorts(width, height int) string {
 		if desc == "" {
 			desc = "(unknown)"
 		}
+		pin := ""
 		if p.Pinned {
-			desc = "\U0001F4CC " + desc
+			pin = " \U0001F4CC"
 		}
 
 		var line string
 		if hasTraffic {
 			port := activeStyle.Render(portStr)
-			line = fmt.Sprintf("%s  %s%s", port, dimStyle.Render(desc), traffic)
+			line = fmt.Sprintf("%s%s  %s%s", port, pin, dimStyle.Render(desc), traffic)
 		} else {
 			port := outStyle.Render(portStr)
-			line = fmt.Sprintf("%s  %s", port, dimStyle.Render(desc))
+			line = fmt.Sprintf("%s%s  %s", port, pin, dimStyle.Render(desc))
 		}
 
 		if focused && i == m.portSelected {
@@ -815,6 +816,9 @@ func (m model) renderRemotePorts(width, height int) string {
 		desc := p.Label
 		if desc == "" {
 			desc = p.Process
+		}
+		if desc == "" {
+			desc = "preset"
 		}
 
 		line := fmt.Sprintf("%s  %s", port, dimStyle.Render(desc))
