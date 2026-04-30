@@ -13,7 +13,6 @@ type Config struct {
 	Connection ConnectionConfig `toml:"connection"`
 	Transfer   TransferConfig   `toml:"transfer"`
 	Ports      PortsConfig      `toml:"ports"`
-	Web        WebConfig        `toml:"web"`
 }
 
 type ConnectionConfig struct {
@@ -30,10 +29,6 @@ type TransferConfig struct {
 type PortsConfig struct {
 	ScanInterval duration `toml:"scan_interval"`
 	Exclude      []int    `toml:"exclude"`
-}
-
-type WebConfig struct {
-	Port int `toml:"port"`
 }
 
 type duration struct {
@@ -58,9 +53,6 @@ func DefaultConfig() *Config {
 		Ports: PortsConfig{
 			ScanInterval: duration{3 * time.Second},
 			Exclude:      []int{22, 19222},
-		},
-		Web: WebConfig{
-			Port: 19876,
 		},
 	}
 }

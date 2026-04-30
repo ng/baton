@@ -9,12 +9,14 @@ import (
 )
 
 type Connection struct {
-	cfg     *Config
-	host    string
-	cmd     *exec.Cmd
-	mu      sync.Mutex
-	stopCh  chan struct{}
-	stopped bool
+	cfg       *Config
+	host      string
+	cmd       *exec.Cmd
+	mu        sync.Mutex
+	stopCh    chan struct{}
+	stopped   bool
+	events    chan ConnEventMsg
+	StartTime time.Time
 }
 
 func NewConnection(cfg *Config, host string) *Connection {
@@ -22,7 +24,19 @@ func NewConnection(cfg *Config, host string) *Connection {
 		cfg:    cfg,
 		host:   host,
 		stopCh: make(chan struct{}),
+		events: make(chan ConnEventMsg, 32),
 	}
+}
+
+func (c *Connection) sendEvent(msg string) {
+	select {
+	case c.events <- ConnEventMsg{Time: time.Now(), Message: msg}:
+	default:
+	}
+}
+
+func (c *Connection) Events() <-chan ConnEventMsg {
+	return c.events
 }
 
 func (c *Connection) Start() error {
@@ -31,7 +45,7 @@ func (c *Connection) Start() error {
 	}
 
 	if err := c.ensureInbox(); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not create inbox: %v\n", err)
+		c.sendEvent(fmt.Sprintf("warning: could not create inbox: %v", err))
 	}
 
 	args := []string{
@@ -47,7 +61,7 @@ func (c *Connection) Start() error {
 	}
 
 	c.cmd = exec.Command("ssh", args...)
-	c.cmd.Stderr = os.Stderr
+	c.cmd.Stderr = nil
 
 	if err := c.cmd.Start(); err != nil {
 		return fmt.Errorf("ssh start: %w", err)
@@ -56,6 +70,8 @@ func (c *Connection) Start() error {
 	for i := 0; i < 30; i++ {
 		time.Sleep(200 * time.Millisecond)
 		if c.IsAlive() {
+			c.StartTime = time.Now()
+			c.sendEvent("connected to " + c.host)
 			go c.watchAndReconnect()
 			return nil
 		}
@@ -144,7 +160,7 @@ func (c *Connection) watchAndReconnect() {
 				}
 				c.mu.Unlock()
 
-				fmt.Fprintln(os.Stderr, "connection lost, reconnecting...")
+				c.sendEvent("connection lost, reconnecting...")
 				Notify("baton", "Connection lost, reconnecting...")
 
 				for attempt := 1; attempt <= 10; attempt++ {
@@ -155,10 +171,12 @@ func (c *Connection) watchAndReconnect() {
 					}
 
 					if err := c.reconnect(); err == nil {
-						fmt.Fprintln(os.Stderr, "reconnected.")
+						c.StartTime = time.Now()
+						c.sendEvent("reconnected")
 						Notify("baton", "Reconnected")
 						break
 					}
+					c.sendEvent(fmt.Sprintf("reconnect attempt %d/10 failed", attempt))
 					time.Sleep(time.Duration(attempt) * 2 * time.Second)
 				}
 			}
@@ -181,7 +199,7 @@ func (c *Connection) reconnect() error {
 	}
 
 	c.cmd = exec.Command("ssh", args...)
-	c.cmd.Stderr = os.Stderr
+	c.cmd.Stderr = nil
 
 	if err := c.cmd.Start(); err != nil {
 		return err

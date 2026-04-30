@@ -3,8 +3,9 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/signal"
-	"syscall"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 var version = "dev"
@@ -67,7 +68,7 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, `baton %s — Mac ↔ Gitpod bridge
 
 Usage:
-  baton connect <host>       Start SSH connection + all services
+  baton connect <host>       Start SSH connection with TUI dashboard
   baton send <file> [dest]   Upload file to remote
   baton ports                List forwarded ports
   baton status               Show connection status
@@ -81,35 +82,31 @@ Config: ~/.baton.toml
 func runConnect(cfg *Config, host string) {
 	conn := NewConnection(cfg, host)
 
+	fmt.Fprintf(os.Stderr, "connecting to %s...\n", host)
 	if err := conn.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "connection failed: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("connected to %s\n", host)
 
 	scanner := NewPortScanner(cfg, conn)
 	go scanner.Run()
-	fmt.Printf("port scanner started (interval: %s)\n", cfg.Ports.ScanInterval)
 
-	web := NewWebUI(cfg, conn)
-	go func() {
-		if err := web.Start(); err != nil {
-			fmt.Fprintf(os.Stderr, "web ui failed: %v\n", err)
-		}
-	}()
-	fmt.Printf("web ui: http://localhost:%d\n", cfg.Web.Port)
+	transferer := NewTransferer(cfg)
 
-	fmt.Println("\nbaton is running. Ctrl+C to disconnect.")
+	throughput := NewThroughputMonitor(conn, 2*time.Second)
+	go throughput.Run()
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	<-sig
+	m := newModel(cfg, conn, scanner, transferer, throughput)
+	p := tea.NewProgram(m, tea.WithAltScreen())
 
-	fmt.Println("\nshutting down...")
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
+	}
+
+	throughput.Stop()
 	scanner.Stop()
-	web.Stop()
 	conn.Stop()
-	fmt.Println("disconnected.")
+	fmt.Fprintln(os.Stderr, "disconnected.")
 }
 
 func runSend(cfg *Config, file, dest string) {
@@ -156,7 +153,6 @@ func runStatus(cfg *Config) {
 	if alive {
 		fmt.Printf("connected: %s\n", cfg.Connection.Host)
 		fmt.Printf("socket:    %s\n", cfg.Connection.ControlSocket)
-		fmt.Printf("web ui:    http://localhost:%d\n", cfg.Web.Port)
 	} else {
 		fmt.Println("not connected")
 	}

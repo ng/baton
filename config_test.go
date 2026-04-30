@@ -22,9 +22,6 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Ports.ScanInterval.Duration != 3*time.Second {
 		t.Errorf("expected scan interval 3s, got %s", cfg.Ports.ScanInterval.Duration)
 	}
-	if cfg.Web.Port != 19876 {
-		t.Errorf("expected web port 19876, got %d", cfg.Web.Port)
-	}
 	if len(cfg.Ports.Exclude) != 2 {
 		t.Errorf("expected 2 excluded ports, got %d", len(cfg.Ports.Exclude))
 	}
@@ -48,8 +45,6 @@ mac_user = "testuser"
 scan_interval = "5s"
 exclude = [22, 80, 443]
 
-[web]
-port = 9999
 `
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
 		t.Fatal(err)
@@ -75,9 +70,6 @@ port = 9999
 	}
 	if cfg.Ports.ScanInterval.Duration != 5*time.Second {
 		t.Errorf("expected scan interval 5s, got %s", cfg.Ports.ScanInterval.Duration)
-	}
-	if cfg.Web.Port != 9999 {
-		t.Errorf("expected web port 9999, got %d", cfg.Web.Port)
 	}
 	if len(cfg.Ports.Exclude) != 3 {
 		t.Errorf("expected 3 excluded ports, got %d", len(cfg.Ports.Exclude))

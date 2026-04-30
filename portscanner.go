@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"os"
 	"regexp"
 	"sort"
@@ -15,9 +14,30 @@ type PortScanner struct {
 	cfg      *Config
 	conn     *Connection
 	mu       sync.RWMutex
-	active   map[int]bool
+	active   map[int]PortInfo
 	excluded map[int]bool
 	stopCh   chan struct{}
+	events   chan PortEventMsg
+}
+
+// ssRe captures port and optional process name from ss -tlnp output.
+// Example: LISTEN 0 511 127.0.0.1:3001 0.0.0.0:* users:(("node",pid=42728,fd=28))
+var ssRe = regexp.MustCompile(`:(\d+)\s+\S+:\*\s*(?:users:\(\("([^"]*)")?`)
+
+// netstatRe captures port and optional process name from netstat -tlnp output.
+// Example: tcp 0 0 127.0.0.1:24175 0.0.0.0:* LISTEN 369925/node
+var netstatRe = regexp.MustCompile(`:(\d+)\s+.*?LISTEN\s+(?:\d+/(\S+)|-)`)
+
+var processAliases = map[string]string{
+	"MainThread": "python",
+	"main":       "go",
+}
+
+func normalizeProcess(name string) string {
+	if alias, ok := processAliases[name]; ok {
+		return alias
+	}
+	return name
 }
 
 func NewPortScanner(cfg *Config, conn *Connection) *PortScanner {
@@ -28,9 +48,10 @@ func NewPortScanner(cfg *Config, conn *Connection) *PortScanner {
 	return &PortScanner{
 		cfg:      cfg,
 		conn:     conn,
-		active:   make(map[int]bool),
+		active:   make(map[int]PortInfo),
 		excluded: excluded,
 		stopCh:   make(chan struct{}),
+		events:   make(chan PortEventMsg, 32),
 	}
 }
 
@@ -54,6 +75,10 @@ func (ps *PortScanner) Stop() {
 	close(ps.stopCh)
 }
 
+func (ps *PortScanner) Events() <-chan PortEventMsg {
+	return ps.events
+}
+
 func (ps *PortScanner) ActivePorts() []int {
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
@@ -66,7 +91,64 @@ func (ps *PortScanner) ActivePorts() []int {
 	return ports
 }
 
-var portRe = regexp.MustCompile(`:(\d+)\s`)
+func (ps *PortScanner) ActivePortInfos() []PortInfo {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+
+	infos := make([]PortInfo, 0, len(ps.active))
+	for _, info := range ps.active {
+		infos = append(infos, info)
+	}
+	sort.Slice(infos, func(i, j int) bool {
+		return infos[i].Port < infos[j].Port
+	})
+	return infos
+}
+
+func (ps *PortScanner) sendEvent(evt PortEventMsg) {
+	select {
+	case ps.events <- evt:
+	default:
+	}
+	Notify("baton", evt.Action+": port "+strconv.Itoa(evt.Port))
+}
+
+func parseLine(line string) (port int, process string, ok bool) {
+	if !strings.Contains(line, "LISTEN") {
+		return 0, "", false
+	}
+
+	// Detect format: ss output starts with LISTEN, netstat starts with tcp/tcp6
+	isSS := strings.HasPrefix(strings.TrimSpace(line), "LISTEN")
+
+	if isSS {
+		if m := ssRe.FindStringSubmatch(line); m != nil {
+			p, err := strconv.Atoi(m[1])
+			if err != nil || p == 0 {
+				return 0, "", false
+			}
+			proc := ""
+			if len(m) > 2 {
+				proc = normalizeProcess(m[2])
+			}
+			return p, proc, true
+		}
+	} else {
+		if m := netstatRe.FindStringSubmatch(line); m != nil {
+			p, err := strconv.Atoi(m[1])
+			if err != nil || p == 0 {
+				return 0, "", false
+			}
+			proc := ""
+			if len(m) > 2 {
+				proc = normalizeProcess(m[2])
+			}
+			return p, proc, true
+		}
+	}
+
+	return 0, "", false
+}
 
 func (ps *PortScanner) scan() {
 	output, err := ps.conn.RunRemote("ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null")
@@ -74,49 +156,53 @@ func (ps *PortScanner) scan() {
 		return
 	}
 
-	discovered := make(map[int]bool)
+	discovered := make(map[int]PortInfo)
 	for _, line := range strings.Split(string(output), "\n") {
-		if !strings.Contains(line, "LISTEN") {
+		port, process, ok := parseLine(line)
+		if !ok {
 			continue
 		}
-
-		matches := portRe.FindAllStringSubmatch(line, -1)
-		for _, m := range matches {
-			port, err := strconv.Atoi(m[1])
-			if err != nil || port == 0 {
-				continue
-			}
-			if ps.excluded[port] {
-				continue
-			}
-			if port < 1024 && port != 80 && port != 443 {
-				continue
-			}
-			discovered[port] = true
-			break
+		if ps.excluded[port] {
+			continue
+		}
+		if port < 1024 && port != 80 && port != 443 {
+			continue
+		}
+		if _, exists := discovered[port]; !exists {
+			discovered[port] = PortInfo{Port: port, Process: process}
 		}
 	}
 
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 
-	for port := range discovered {
-		if !ps.active[port] {
+	for port, info := range discovered {
+		if _, exists := ps.active[port]; !exists {
 			if err := ps.conn.Forward(port, port); err == nil {
-				ps.active[port] = true
+				ps.active[port] = info
 				ps.saveState()
-				fmt.Fprintf(os.Stderr, "→ forwarded port %d\n", port)
-				Notify("baton", fmt.Sprintf("Port %d forwarded to localhost:%d", port, port))
+				ps.sendEvent(PortEventMsg{
+					Time:    time.Now(),
+					Port:    port,
+					Process: info.Process,
+					Action:  "forwarded",
+				})
 			}
 		}
 	}
 
 	for port := range ps.active {
-		if !discovered[port] {
+		if _, exists := discovered[port]; !exists {
 			if err := ps.conn.CancelForward(port, port); err == nil {
+				info := ps.active[port]
 				delete(ps.active, port)
 				ps.saveState()
-				fmt.Fprintf(os.Stderr, "✕ removed forward for port %d\n", port)
+				ps.sendEvent(PortEventMsg{
+					Time:    time.Now(),
+					Port:    port,
+					Process: info.Process,
+					Action:  "removed",
+				})
 			}
 		}
 	}
