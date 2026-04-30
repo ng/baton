@@ -9,22 +9,24 @@ import (
 )
 
 type Connection struct {
-	cfg       *Config
-	host      string
-	cmd       *exec.Cmd
-	mu        sync.Mutex
-	stopCh    chan struct{}
-	stopped   bool
-	events    chan ConnEventMsg
-	StartTime time.Time
+	cfg            *Config
+	host           string
+	cmd            *exec.Cmd
+	mu             sync.Mutex
+	stopCh         chan struct{}
+	stopped        bool
+	autoReconnect  bool
+	events         chan ConnEventMsg
+	StartTime      time.Time
 }
 
 func NewConnection(cfg *Config, host string) *Connection {
 	return &Connection{
-		cfg:    cfg,
-		host:   host,
-		stopCh: make(chan struct{}),
-		events: make(chan ConnEventMsg, 32),
+		cfg:           cfg,
+		host:          host,
+		autoReconnect: true,
+		stopCh:        make(chan struct{}),
+		events:        make(chan ConnEventMsg, 32),
 	}
 }
 
@@ -143,6 +145,18 @@ func (c *Connection) CancelForward(localPort, remotePort int) error {
 	return cmd.Run()
 }
 
+func (c *Connection) SetAutoReconnect(on bool) {
+	c.mu.Lock()
+	c.autoReconnect = on
+	c.mu.Unlock()
+}
+
+func (c *Connection) AutoReconnect() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.autoReconnect
+}
+
 func (c *Connection) watchAndReconnect() {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -158,7 +172,14 @@ func (c *Connection) watchAndReconnect() {
 					c.mu.Unlock()
 					return
 				}
+				autoReconn := c.autoReconnect
 				c.mu.Unlock()
+
+				if !autoReconn {
+					c.sendEvent("connection lost (auto-reconnect off)")
+					Notify("baton", "Connection lost")
+					continue
+				}
 
 				c.sendEvent("connection lost, reconnecting...")
 				Notify("baton", "Connection lost, reconnecting...")
@@ -169,6 +190,14 @@ func (c *Connection) watchAndReconnect() {
 						return
 					default:
 					}
+
+					c.mu.Lock()
+					if !c.autoReconnect {
+						c.mu.Unlock()
+						c.sendEvent("auto-reconnect disabled, stopping retries")
+						break
+					}
+					c.mu.Unlock()
 
 					if err := c.reconnect(); err == nil {
 						c.StartTime = time.Now()

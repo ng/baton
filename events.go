@@ -45,4 +45,14 @@ type ThroughputMsg struct {
 	Download float64
 }
 
+type PortTrafficInfo struct {
+	Port     int
+	Upload   float64
+	Download float64
+}
+
+type PortTrafficMsg struct {
+	Ports map[int]PortTrafficInfo
+}
+
 type TickMsg time.Time

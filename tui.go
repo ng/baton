@@ -18,12 +18,14 @@ var (
 	sparkUpColor   = lipgloss.Color("39")
 	sparkDownColor = lipgloss.Color("78")
 	headerColor    = lipgloss.Color("255")
+	yellowColor    = lipgloss.Color("220")
 
 	headerStyle = lipgloss.NewStyle().Bold(true).Foreground(headerColor)
 	dimStyle    = lipgloss.NewStyle().Foreground(dimColor)
 	accentStyle = lipgloss.NewStyle().Foreground(accentColor)
 	greenStyle  = lipgloss.NewStyle().Foreground(greenColor)
 	redStyle    = lipgloss.NewStyle().Foreground(redColor)
+	yellowStyle = lipgloss.NewStyle().Foreground(yellowColor)
 
 	sectionTitle = lipgloss.NewStyle().
 			Bold(true).
@@ -35,8 +37,9 @@ var (
 )
 
 type logEntry struct {
-	Time    time.Time
-	Message string
+	Time      time.Time
+	Message   string
+	Direction string // "→" outbound, "←" inbound
 }
 
 type transferEntry struct {
@@ -51,6 +54,9 @@ type model struct {
 	host        string
 	connectedAt time.Time
 
+	autoReconnect bool
+	conn          *Connection
+
 	reverseTunnels []PortInfo
 	localForwards  []PortInfo
 	scanner        *PortScanner
@@ -60,9 +66,14 @@ type model struct {
 
 	uploadSamples   []float64
 	downloadSamples []float64
+	portTraffic     map[int]PortTrafficInfo
 
 	inboxPath       string
 	recentTransfers []transferEntry
+	transferer      *Transferer
+
+	sendMode  bool
+	sendInput string
 
 	width  int
 	height int
@@ -71,6 +82,7 @@ type model struct {
 	portEvents       <-chan PortEventMsg
 	transferEvents   <-chan TransferDoneMsg
 	throughputEvents <-chan ThroughputMsg
+	portTrafficEvents <-chan PortTrafficMsg
 }
 
 func newModel(cfg *Config, conn *Connection, scanner *PortScanner, transferer *Transferer, throughput *ThroughputMonitor) model {
@@ -82,22 +94,28 @@ func newModel(cfg *Config, conn *Connection, scanner *PortScanner, transferer *T
 		host:        conn.host,
 		connectedAt: conn.StartTime,
 
+		autoReconnect: true,
+		conn:          conn,
+
 		reverseTunnels: []PortInfo{
 			{Port: cfg.Connection.ReversePort, Process: "ssh-reverse"},
 		},
-		scanner: scanner,
+		scanner:    scanner,
+		transferer: transferer,
 
 		logViewport: vp,
 		logEntries: []logEntry{
-			{Time: time.Now(), Message: "connected to " + conn.host},
+			{Time: time.Now(), Message: "connected to " + conn.host, Direction: "←"},
 		},
 
-		inboxPath: cfg.Transfer.Inbox,
+		portTraffic: make(map[int]PortTrafficInfo),
+		inboxPath:   cfg.Transfer.Inbox,
 
-		connEvents:       conn.Events(),
-		portEvents:       scanner.Events(),
-		transferEvents:   transferer.Events(),
-		throughputEvents: throughput.Events(),
+		connEvents:        conn.Events(),
+		portEvents:        scanner.Events(),
+		transferEvents:    transferer.Events(),
+		throughputEvents:  throughput.Events(),
+		portTrafficEvents: throughput.PortEvents(),
 	}
 }
 
@@ -125,10 +143,22 @@ func waitForThroughput(ch <-chan ThroughputMsg) tea.Cmd {
 	}
 }
 
+func waitForPortTraffic(ch <-chan PortTrafficMsg) tea.Cmd {
+	return func() tea.Msg {
+		return <-ch
+	}
+}
+
 func tickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
 		return TickMsg(t)
 	})
+}
+
+type sendResultMsg struct {
+	filename   string
+	remotePath string
+	err        error
 }
 
 func (m model) Init() tea.Cmd {
@@ -137,6 +167,7 @@ func (m model) Init() tea.Cmd {
 		waitForPortEvent(m.portEvents),
 		waitForTransferEvent(m.transferEvents),
 		waitForThroughput(m.throughputEvents),
+		waitForPortTraffic(m.portTrafficEvents),
 		tickCmd(),
 	)
 }
@@ -144,9 +175,25 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if m.sendMode {
+			return m.updateSendMode(msg)
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "r":
+			m.autoReconnect = !m.autoReconnect
+			m.conn.SetAutoReconnect(m.autoReconnect)
+			state := "on"
+			if !m.autoReconnect {
+				state = "off"
+			}
+			m.addLog(time.Now(), "auto-reconnect "+state, "")
+			return m, nil
+		case "s":
+			m.sendMode = true
+			m.sendInput = ""
+			return m, nil
 		}
 		var cmd tea.Cmd
 		m.logViewport, cmd = m.logViewport.Update(msg)
@@ -163,7 +210,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickCmd()
 
 	case ConnEventMsg:
-		m.addLog(msg.Time, msg.Message)
+		dir := "←"
+		if strings.Contains(msg.Message, "reconnect") {
+			dir = "→"
+		}
+		m.addLog(msg.Time, msg.Message, dir)
 		if strings.Contains(msg.Message, "reconnected") || strings.Contains(msg.Message, "connected to") {
 			m.connected = true
 			m.connectedAt = msg.Time
@@ -177,15 +228,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if label == "" {
 			label = "unknown"
 		}
-		m.addLog(msg.Time, fmt.Sprintf("port %d %s (%s)", msg.Port, msg.Action, label))
+		dir := "→"
+		if msg.Action == "removed" {
+			dir = "←"
+		}
+		m.addLog(msg.Time, fmt.Sprintf("port %d %s (%s)", msg.Port, msg.Action, label), dir)
 		m.localForwards = m.scanner.ActivePortInfos()
 		return m, waitForPortEvent(m.portEvents)
 
 	case TransferDoneMsg:
 		if msg.Err != nil {
-			m.addLog(msg.Time, fmt.Sprintf("transfer failed: %s: %v", msg.Filename, msg.Err))
+			m.addLog(msg.Time, fmt.Sprintf("transfer failed: %s: %v", msg.Filename, msg.Err), "✕")
 		} else {
-			m.addLog(msg.Time, fmt.Sprintf("uploaded %s → %s", msg.Filename, msg.RemotePath))
+			m.addLog(msg.Time, fmt.Sprintf("sent %s → %s", msg.Filename, msg.RemotePath), "→")
 			m.recentTransfers = append(m.recentTransfers, transferEntry{
 				Time:       msg.Time,
 				Filename:   msg.Filename,
@@ -202,13 +257,60 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.uploadSamples = appendRing(m.uploadSamples, msg.Upload, 60)
 		m.downloadSamples = appendRing(m.downloadSamples, msg.Download, 60)
 		return m, waitForThroughput(m.throughputEvents)
+
+	case PortTrafficMsg:
+		for port, info := range msg.Ports {
+			m.portTraffic[port] = info
+		}
+		return m, waitForPortTraffic(m.portTrafficEvents)
+
+	case sendResultMsg:
+		if msg.err != nil {
+			m.addLog(time.Now(), fmt.Sprintf("send failed: %s: %v", msg.filename, msg.err), "✕")
+		}
+		return m, nil
 	}
 
 	return m, nil
 }
 
-func (m *model) addLog(t time.Time, msg string) {
-	m.logEntries = append(m.logEntries, logEntry{Time: t, Message: msg})
+func (m model) updateSendMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.sendMode = false
+		m.sendInput = ""
+		return m, nil
+	case "enter":
+		path := strings.TrimSpace(m.sendInput)
+		m.sendMode = false
+		m.sendInput = ""
+		if path == "" {
+			return m, nil
+		}
+		t := m.transferer
+		inbox := m.inboxPath
+		return m, func() tea.Msg {
+			_, err := t.Transfer(path, inbox)
+			return sendResultMsg{filename: path, err: err}
+		}
+	case "backspace":
+		if len(m.sendInput) > 0 {
+			m.sendInput = m.sendInput[:len(m.sendInput)-1]
+		}
+		return m, nil
+	default:
+		if len(msg.String()) == 1 || msg.String() == " " {
+			m.sendInput += msg.String()
+		}
+		return m, nil
+	}
+}
+
+func (m *model) addLog(t time.Time, msg string, direction string) {
+	if direction == "" {
+		direction = " "
+	}
+	m.logEntries = append(m.logEntries, logEntry{Time: t, Message: msg, Direction: direction})
 	if len(m.logEntries) > 200 {
 		m.logEntries = m.logEntries[len(m.logEntries)-200:]
 	}
@@ -219,7 +321,15 @@ func (m *model) updateViewport() {
 	var lines []string
 	for _, e := range m.logEntries {
 		ts := dimStyle.Render(e.Time.Format("15:04:05"))
-		lines = append(lines, fmt.Sprintf("  %s  %s", ts, e.Message))
+		dir := dimStyle.Render(e.Direction)
+		if e.Direction == "→" {
+			dir = greenStyle.Render("→")
+		} else if e.Direction == "←" {
+			dir = accentStyle.Render("←")
+		} else if e.Direction == "✕" {
+			dir = redStyle.Render("✕")
+		}
+		lines = append(lines, fmt.Sprintf("  %s %s %s", ts, dir, e.Message))
 	}
 	content := strings.Join(lines, "\n")
 	m.logViewport.SetContent(content)
@@ -227,16 +337,17 @@ func (m *model) updateViewport() {
 }
 
 func (m *model) recalcLayout() {
-	logHeight := m.height - 18
-	if logHeight < 3 {
-		logHeight = 3
+	// Header(1) + blank(1) + Network(3) + blank(1) + bottom panes(rest) + blank(1) + footer(1)
+	bottomHeight := m.height - 8
+	if bottomHeight < 4 {
+		bottomHeight = 4
 	}
-	logWidth := m.width - 2
+	logWidth := (m.width / 3) - 2
 	if logWidth < 20 {
 		logWidth = 20
 	}
 	m.logViewport.Width = logWidth
-	m.logViewport.Height = logHeight
+	m.logViewport.Height = bottomHeight - 1
 	m.updateViewport()
 }
 
@@ -246,14 +357,11 @@ func (m model) View() string {
 	}
 
 	var sections []string
-
 	sections = append(sections, m.renderHeader())
 	sections = append(sections, "")
-	sections = append(sections, m.renderPorts())
+	sections = append(sections, m.renderNetwork())
 	sections = append(sections, "")
-	sections = append(sections, m.renderMiddle())
-	sections = append(sections, "")
-	sections = append(sections, m.renderActivity())
+	sections = append(sections, m.renderBottomPanes())
 	sections = append(sections, "")
 	sections = append(sections, m.renderFooter())
 
@@ -278,69 +386,26 @@ func (m model) renderHeader() string {
 	host := dimStyle.Render(m.host)
 	up := dimStyle.Render(uptime)
 
-	line := left + " ── " + host + up
-
-	pad := m.width - lipgloss.Width(line) - 10
-	if pad < 0 {
-		pad = 0
+	reconnLabel := greenStyle.Render("auto-reconnect on")
+	if !m.autoReconnect {
+		reconnLabel = yellowStyle.Render("auto-reconnect off")
 	}
 
-	return line + strings.Repeat("─", pad) + dimStyle.Render(" q quit")
+	leftPart := left + " ── " + host + up
+	rightPart := reconnLabel + "  " + dimStyle.Render("q quit")
+	gap := m.width - lipgloss.Width(leftPart) - lipgloss.Width(rightPart)
+	if gap < 2 {
+		gap = 2
+	}
+
+	return leftPart + strings.Repeat(" ", gap) + rightPart
 }
 
-func (m model) renderPorts() string {
-	colWidth := (m.width - 4) / 2
-	if colWidth < 30 {
-		colWidth = 30
+func (m model) renderNetwork() string {
+	sparkWidth := m.width - 18
+	if sparkWidth < 10 {
+		sparkWidth = 10
 	}
-
-	// Left: reverse tunnels
-	left := sectionTitle.Render("REVERSE TUNNELS") + "\n"
-	if len(m.reverseTunnels) == 0 {
-		left += portStyle.Render(dimStyle.Render("none"))
-	}
-	for _, p := range m.reverseTunnels {
-		arrow := accentStyle.Render("←")
-		port := accentStyle.Render(fmt.Sprintf(":%d", p.Port))
-		proc := dimStyle.Render(p.Process)
-		left += portStyle.Render(fmt.Sprintf("%s %s  %s", arrow, port, proc)) + "\n"
-	}
-
-	// Right: local forwards
-	right := sectionTitle.Render("LOCAL FORWARDS (pod → mac)") + "\n"
-	if len(m.localForwards) == 0 {
-		right += portStyle.Render(dimStyle.Render("scanning..."))
-	}
-	for _, p := range m.localForwards {
-		arrow := greenStyle.Render("→")
-		port := greenStyle.Render(fmt.Sprintf(":%d", p.Port))
-		proc := p.Process
-		if proc == "" {
-			proc = "(unknown)"
-		}
-		proc = dimStyle.Render(proc)
-		right += portStyle.Render(fmt.Sprintf("%s %s  %s", arrow, port, proc)) + "\n"
-	}
-
-	leftBlock := lipgloss.NewStyle().Width(colWidth).Render(left)
-	rightBlock := lipgloss.NewStyle().Width(colWidth).Render(right)
-
-	return lipgloss.JoinHorizontal(lipgloss.Top, leftBlock, rightBlock)
-}
-
-func (m model) renderMiddle() string {
-	colWidth := (m.width - 4) / 2
-	if colWidth < 30 {
-		colWidth = 30
-	}
-
-	sparkWidth := colWidth - 22
-	if sparkWidth < 8 {
-		sparkWidth = 8
-	}
-
-	// Left: network
-	left := sectionTitle.Render("NETWORK") + "\n"
 
 	upRate := formatBytes(lastSample(m.uploadSamples))
 	downRate := formatBytes(lastSample(m.downloadSamples))
@@ -350,39 +415,88 @@ func (m model) renderMiddle() string {
 	downSpark := lipgloss.NewStyle().Foreground(sparkDownColor).Render(
 		renderSparkline(m.downloadSamples, sparkWidth))
 
-	left += portStyle.Render(fmt.Sprintf("↑ %8s %s", upRate, upSpark)) + "\n"
-	left += portStyle.Render(fmt.Sprintf("↓ %8s %s", downRate, downSpark)) + "\n"
+	header := sectionTitle.Render("NETWORK")
+	up := portStyle.Render(fmt.Sprintf("↑ %8s %s", upRate, upSpark))
+	down := portStyle.Render(fmt.Sprintf("↓ %8s %s", downRate, downSpark))
 
-	// Right: file transfers
-	right := sectionTitle.Render("FILE TRANSFERS") + "\n"
-	right += portStyle.Render(dimStyle.Render("inbox: ")+m.inboxPath) + "\n"
-
-	if len(m.recentTransfers) == 0 {
-		right += portStyle.Render(dimStyle.Render("no recent transfers")) + "\n"
-	} else {
-		shown := m.recentTransfers
-		if len(shown) > 5 {
-			shown = shown[len(shown)-5:]
-		}
-		for _, t := range shown {
-			right += portStyle.Render(fmt.Sprintf("%s → %s",
-				t.Filename, t.RemotePath)) + "\n"
-		}
-	}
-
-	leftBlock := lipgloss.NewStyle().Width(colWidth).Render(left)
-	rightBlock := lipgloss.NewStyle().Width(colWidth).Render(right)
-
-	return lipgloss.JoinHorizontal(lipgloss.Top, leftBlock, rightBlock)
+	return header + "\n" + up + "\n" + down
 }
 
-func (m model) renderActivity() string {
+func (m model) renderBottomPanes() string {
+	colWidth := m.width / 3
+	if colWidth < 20 {
+		colWidth = 20
+	}
+
+	bottomHeight := m.height - 8
+	if bottomHeight < 4 {
+		bottomHeight = 4
+	}
+
+	activity := m.renderActivity(colWidth, bottomHeight)
+	localPorts := m.renderLocalPorts(colWidth, bottomHeight)
+	remotePorts := m.renderRemotePorts(colWidth, bottomHeight)
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, activity, localPorts, remotePorts)
+}
+
+func (m model) renderActivity(width, height int) string {
 	header := sectionTitle.Render("ACTIVITY")
-	return header + "\n" + m.logViewport.View()
+	content := header + "\n" + m.logViewport.View()
+	return lipgloss.NewStyle().Width(width).Height(height).Render(content)
+}
+
+func (m model) renderLocalPorts(width, height int) string {
+	header := sectionTitle.Render("LOCAL → mac")
+	var lines []string
+	if len(m.localForwards) == 0 {
+		lines = append(lines, portStyle.Render(dimStyle.Render("scanning...")))
+	}
+	for _, p := range m.localForwards {
+		port := greenStyle.Render(fmt.Sprintf(":%d", p.Port))
+		proc := p.Process
+		if proc == "" {
+			proc = "(unknown)"
+		}
+		proc = dimStyle.Render(proc)
+
+		traffic := ""
+		if t, ok := m.portTraffic[p.Port]; ok {
+			total := t.Upload + t.Download
+			if total > 0 {
+				traffic = " " + dimStyle.Render(formatBytes(total))
+			}
+		}
+
+		lines = append(lines, portStyle.Render(fmt.Sprintf("→ %s  %s%s", port, proc, traffic)))
+	}
+
+	content := header + "\n" + strings.Join(lines, "\n")
+	return lipgloss.NewStyle().Width(width).Height(height).Render(content)
+}
+
+func (m model) renderRemotePorts(width, height int) string {
+	header := sectionTitle.Render("REMOTE ← pod")
+	var lines []string
+	if len(m.reverseTunnels) == 0 {
+		lines = append(lines, portStyle.Render(dimStyle.Render("none")))
+	}
+	for _, p := range m.reverseTunnels {
+		port := accentStyle.Render(fmt.Sprintf(":%d", p.Port))
+		proc := dimStyle.Render(p.Process)
+		lines = append(lines, portStyle.Render(fmt.Sprintf("← %s  %s", port, proc)))
+	}
+
+	content := header + "\n" + strings.Join(lines, "\n")
+	return lipgloss.NewStyle().Width(width).Height(height).Render(content)
 }
 
 func (m model) renderFooter() string {
-	return dimStyle.Render("  ↑↓/jk scroll activity  q quit")
+	if m.sendMode {
+		cursor := accentStyle.Render("█")
+		return "  " + accentStyle.Render("send:") + " " + m.sendInput + cursor + "  " + dimStyle.Render("enter send  esc cancel")
+	}
+	return dimStyle.Render("  ↑↓ scroll  r reconnect  s send  q quit")
 }
 
 func formatDuration(d time.Duration) string {
