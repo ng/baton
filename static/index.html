@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>shuttle</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Mono', Menlo, monospace;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 2rem;
+  }
+  h1 {
+    font-size: 1.5rem;
+    font-weight: 400;
+    margin-bottom: 0.5rem;
+    color: #fff;
+  }
+  .status {
+    font-size: 0.85rem;
+    color: #888;
+    margin-bottom: 2rem;
+  }
+  .status .dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  .dot.on { background: #4ade80; }
+  .dot.off { background: #ef4444; }
+
+  .drop-zone {
+    width: 100%;
+    max-width: 500px;
+    min-height: 200px;
+    border: 2px dashed #333;
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    transition: all 0.2s;
+    cursor: pointer;
+    position: relative;
+  }
+  .drop-zone.over {
+    border-color: #6366f1;
+    background: rgba(99, 102, 241, 0.1);
+  }
+  .drop-zone.uploading {
+    border-color: #f59e0b;
+    background: rgba(245, 158, 11, 0.05);
+  }
+  .drop-zone p {
+    color: #666;
+    font-size: 0.9rem;
+    text-align: center;
+  }
+  .drop-zone .icon {
+    font-size: 2.5rem;
+    margin-bottom: 1rem;
+    opacity: 0.5;
+  }
+  .drop-zone input[type="file"] {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  .results {
+    width: 100%;
+    max-width: 500px;
+    margin-top: 1.5rem;
+  }
+  .result {
+    background: #16213e;
+    border: 1px solid #1e3a5f;
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.85rem;
+  }
+  .result .path {
+    color: #4ade80;
+    font-family: 'SF Mono', Menlo, monospace;
+    word-break: break-all;
+  }
+  .result .copy-btn {
+    background: none;
+    border: 1px solid #333;
+    color: #888;
+    padding: 4px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.75rem;
+    white-space: nowrap;
+    margin-left: 0.5rem;
+  }
+  .result .copy-btn:hover { border-color: #6366f1; color: #fff; }
+  .result.error .path { color: #ef4444; }
+
+  .ports-section {
+    width: 100%;
+    max-width: 500px;
+    margin-top: 2rem;
+  }
+  .ports-section h2 {
+    font-size: 0.9rem;
+    font-weight: 400;
+    color: #888;
+    margin-bottom: 0.5rem;
+  }
+  .port-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .port-badge {
+    background: #16213e;
+    border: 1px solid #1e3a5f;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 0.8rem;
+    color: #6366f1;
+  }
+  .port-badge a {
+    color: inherit;
+    text-decoration: none;
+  }
+  .port-badge a:hover { text-decoration: underline; }
+  .empty { color: #555; font-size: 0.8rem; }
+</style>
+</head>
+<body>
+
+<h1>shuttle</h1>
+<div class="status" id="status">
+  <span class="dot" id="dot"></span>
+  <span id="status-text">checking...</span>
+</div>
+
+<div class="drop-zone" id="dropZone">
+  <div class="icon">&#8693;</div>
+  <p>Drop files here to upload to remote</p>
+  <input type="file" id="fileInput" multiple>
+</div>
+
+<div class="results" id="results"></div>
+
+<div class="ports-section">
+  <h2>forwarded ports</h2>
+  <div class="port-list" id="portList">
+    <span class="empty">none</span>
+  </div>
+</div>
+
+<script>
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+const results = document.getElementById('results');
+
+['dragenter', 'dragover'].forEach(e => {
+  dropZone.addEventListener(e, ev => { ev.preventDefault(); dropZone.classList.add('over'); });
+});
+['dragleave', 'drop'].forEach(e => {
+  dropZone.addEventListener(e, ev => { ev.preventDefault(); dropZone.classList.remove('over'); });
+});
+
+dropZone.addEventListener('drop', ev => {
+  const files = ev.dataTransfer.files;
+  for (const f of files) uploadFile(f);
+});
+
+fileInput.addEventListener('change', () => {
+  for (const f of fileInput.files) uploadFile(f);
+  fileInput.value = '';
+});
+
+async function uploadFile(file) {
+  dropZone.classList.add('uploading');
+  const fd = new FormData();
+  fd.append('file', file);
+
+  try {
+    const res = await fetch('/upload', { method: 'POST', body: fd });
+    const data = await res.json();
+
+    if (data.error) {
+      addResult(data.error, true);
+    } else {
+      addResult(data.remote_path, false);
+    }
+  } catch (err) {
+    addResult('upload failed: ' + err.message, true);
+  } finally {
+    dropZone.classList.remove('uploading');
+  }
+}
+
+function addResult(path, isError) {
+  const div = document.createElement('div');
+  div.className = 'result' + (isError ? ' error' : '');
+  div.innerHTML = `
+    <span class="path">${escapeHtml(path)}</span>
+    ${isError ? '' : `<button class="copy-btn" onclick="copyPath('${escapeHtml(path)}', this)">copy</button>`}
+  `;
+  results.prepend(div);
+}
+
+function copyPath(text, btn) {
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = 'copied';
+    setTimeout(() => btn.textContent = 'copy', 1500);
+  });
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function pollStatus() {
+  try {
+    const res = await fetch('/status');
+    const data = await res.json();
+    const dot = document.getElementById('dot');
+    const text = document.getElementById('status-text');
+    dot.className = 'dot ' + (data.connected ? 'on' : 'off');
+    text.textContent = data.connected ? data.host : 'disconnected';
+  } catch {}
+}
+
+async function pollPorts() {
+  try {
+    const res = await fetch('/ports');
+    const data = await res.json();
+    const list = document.getElementById('portList');
+    if (!data.ports || data.ports.length === 0) {
+      list.innerHTML = '<span class="empty">none</span>';
+      return;
+    }
+    list.innerHTML = data.ports.map(p =>
+      `<span class="port-badge"><a href="http://localhost:${p}" target="_blank">${p}</a></span>`
+    ).join('');
+  } catch {}
+}
+
+pollStatus();
+pollPorts();
+setInterval(pollStatus, 5000);
+setInterval(pollPorts, 5000);
+</script>
+</body>
+</html>
