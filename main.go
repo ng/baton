@@ -24,7 +24,7 @@ func main() {
 	switch os.Args[1] {
 	case "connect":
 		if len(os.Args) < 3 && cfg.Connection.Host == "" {
-			fmt.Fprintln(os.Stderr, "usage: shuttle connect <host>")
+			fmt.Fprintln(os.Stderr, "usage: baton connect <host>")
 			os.Exit(1)
 		}
 		host := cfg.Connection.Host
@@ -35,7 +35,7 @@ func main() {
 
 	case "send":
 		if len(os.Args) < 3 {
-			fmt.Fprintln(os.Stderr, "usage: shuttle send <file> [remote-path]")
+			fmt.Fprintln(os.Stderr, "usage: baton send <file> [remote-path]")
 			os.Exit(1)
 		}
 		dest := cfg.Transfer.Inbox
@@ -54,7 +54,7 @@ func main() {
 		runDisconnect(cfg)
 
 	case "version":
-		fmt.Printf("shuttle %s\n", version)
+		fmt.Printf("baton %s\n", version)
 
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
@@ -64,17 +64,17 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Fprintf(os.Stderr, `shuttle %s — Mac ↔ Gitpod bridge
+	fmt.Fprintf(os.Stderr, `baton %s — Mac ↔ Gitpod bridge
 
 Usage:
-  shuttle connect <host>       Start SSH connection + all services
-  shuttle send <file> [dest]   Upload file to remote
-  shuttle ports                List forwarded ports
-  shuttle status               Show connection status
-  shuttle disconnect           Clean shutdown
-  shuttle version              Print version
+  baton connect <host>       Start SSH connection + all services
+  baton send <file> [dest]   Upload file to remote
+  baton ports                List forwarded ports
+  baton status               Show connection status
+  baton disconnect           Clean shutdown
+  baton version              Print version
 
-Config: ~/.shuttle.toml
+Config: ~/.baton.toml
 `, version)
 }
 
@@ -99,7 +99,7 @@ func runConnect(cfg *Config, host string) {
 	}()
 	fmt.Printf("web ui: http://localhost:%d\n", cfg.Web.Port)
 
-	fmt.Println("\nshuttle is running. Ctrl+C to disconnect.")
+	fmt.Println("\nbaton is running. Ctrl+C to disconnect.")
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -115,7 +115,7 @@ func runConnect(cfg *Config, host string) {
 func runSend(cfg *Config, file, dest string) {
 	conn := NewConnection(cfg, cfg.Connection.Host)
 	if !conn.IsAlive() {
-		fmt.Fprintln(os.Stderr, "no active connection. run 'shuttle connect' first.")
+		fmt.Fprintln(os.Stderr, "no active connection. run 'baton connect' first.")
 		os.Exit(1)
 	}
 	remotePath, err := TransferFile(cfg, file, dest)

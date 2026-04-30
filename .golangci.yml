@@ -1,0 +1,21 @@
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - gosimple
+    - gocritic
+
+linters-settings:
+  gocritic:
+    enabled-checks:
+      - appendAssign
+      - dupBranchBody
+      - dupCase
+      - equalFold
+      - sloppyLen
+
+issues:
+  exclude-use-default: true

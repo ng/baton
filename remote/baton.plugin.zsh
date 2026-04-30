@@ -1,4 +1,4 @@
-# shuttle.plugin.zsh — auto-detect Mac paths pasted into remote terminal
+# baton.plugin.zsh — auto-detect Mac paths pasted into remote terminal
 #
 # When you drag a file from Mac Finder into a terminal, the local path
 # (e.g., /Users/you/Desktop/file.html) gets pasted. This widget intercepts
@@ -6,20 +6,20 @@
 # the path with the remote location.
 #
 # Source this in your .zshrc:
-#   source /path/to/shuttle.plugin.zsh
+#   source /path/to/baton.plugin.zsh
 
-SHUTTLE_PORT="${SHUTTLE_PORT:-19222}"
-SHUTTLE_MAC_USER="${SHUTTLE_MAC_USER:-}"
-SHUTTLE_INBOX="${SHUTTLE_INBOX:-/workspaces/.inbox}"
+BATON_PORT="${BATON_PORT:-19222}"
+BATON_MAC_USER="${BATON_MAC_USER:-}"
+BATON_INBOX="${BATON_INBOX:-/workspaces/.inbox}"
 
-_shuttle_grab_file() {
+_baton_grab_file() {
     local mac_path="$1"
     local filename="${mac_path:t}"
-    local dest="${SHUTTLE_INBOX}/${filename}"
+    local dest="${BATON_INBOX}/${filename}"
 
-    mkdir -p "$SHUTTLE_INBOX" 2>/dev/null
+    mkdir -p "$BATON_INBOX" 2>/dev/null
 
-    local mac_user="$SHUTTLE_MAC_USER"
+    local mac_user="$BATON_MAC_USER"
     if [[ -z "$mac_user" ]]; then
         mac_user="${${mac_path#/Users/}%%/*}"
     fi
@@ -27,7 +27,7 @@ _shuttle_grab_file() {
         return 1
     fi
 
-    scp -P "$SHUTTLE_PORT" -o StrictHostKeyChecking=no -o LogLevel=ERROR \
+    scp -P "$BATON_PORT" -o StrictHostKeyChecking=no -o LogLevel=ERROR \
         "${mac_user}@localhost:${mac_path}" "$dest" 2>/dev/null
     if [[ $? -eq 0 ]]; then
         echo "$dest"
@@ -36,7 +36,7 @@ _shuttle_grab_file() {
     return 1
 }
 
-_shuttle_bracketed_paste() {
+_baton_bracketed_paste() {
     local pasted
     zle .bracketed-paste pasted
 
@@ -44,15 +44,15 @@ _shuttle_bracketed_paste() {
     if [[ "$pasted" =~ ^/Users/[^/]+/.+ ]]; then
         # Single path, no spaces or newlines (simple case)
         if [[ "$pasted" != *$'\n'* ]]; then
-            zle -M "shuttle: uploading ${pasted:t}..."
+            zle -M "baton: uploading ${pasted:t}..."
             local remote_path
-            remote_path="$(_shuttle_grab_file "$pasted")"
+            remote_path="$(_baton_grab_file "$pasted")"
             if [[ $? -eq 0 && -n "$remote_path" ]]; then
                 LBUFFER+="$remote_path"
-                zle -M "shuttle: ${pasted:t} → ${remote_path}"
+                zle -M "baton: ${pasted:t} → ${remote_path}"
                 return
             else
-                zle -M "shuttle: upload failed, pasting local path"
+                zle -M "baton: upload failed, pasting local path"
             fi
         fi
     fi
@@ -61,4 +61,4 @@ _shuttle_bracketed_paste() {
     LBUFFER+="$pasted"
 }
 
-zle -N bracketed-paste _shuttle_bracketed_paste
+zle -N bracketed-paste _baton_bracketed_paste

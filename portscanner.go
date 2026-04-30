@@ -106,7 +106,7 @@ func (ps *PortScanner) scan() {
 				ps.active[port] = true
 				ps.saveState()
 				fmt.Fprintf(os.Stderr, "→ forwarded port %d\n", port)
-				Notify("shuttle", fmt.Sprintf("Port %d forwarded to localhost:%d", port, port))
+				Notify("baton", fmt.Sprintf("Port %d forwarded to localhost:%d", port, port))
 			}
 		}
 	}

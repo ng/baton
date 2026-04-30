@@ -1,4 +1,4 @@
-module github.com/user/shuttle
+module github.com/ng/baton
 
 go 1.25.3
 

@@ -50,7 +50,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		Connection: ConnectionConfig{
 			ReversePort:   19222,
-			ControlSocket: "/tmp/shuttle.sock",
+			ControlSocket: "/tmp/baton.sock",
 		},
 		Transfer: TransferConfig{
 			Inbox: "/workspaces/.inbox",
@@ -71,7 +71,7 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 
-	path := filepath.Join(home, ".shuttle.toml")
+	path := filepath.Join(home, ".baton.toml")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)

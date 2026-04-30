@@ -145,7 +145,7 @@ func (c *Connection) watchAndReconnect() {
 				c.mu.Unlock()
 
 				fmt.Fprintln(os.Stderr, "connection lost, reconnecting...")
-				Notify("shuttle", "Connection lost, reconnecting...")
+				Notify("baton", "Connection lost, reconnecting...")
 
 				for attempt := 1; attempt <= 10; attempt++ {
 					select {
@@ -156,7 +156,7 @@ func (c *Connection) watchAndReconnect() {
 
 					if err := c.reconnect(); err == nil {
 						fmt.Fprintln(os.Stderr, "reconnected.")
-						Notify("shuttle", "Reconnected")
+						Notify("baton", "Reconnected")
 						break
 					}
 					time.Sleep(time.Duration(attempt) * 2 * time.Second)

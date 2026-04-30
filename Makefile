@@ -1,6 +1,6 @@
 .PHONY: build build-mac build-linux clean
 
-BINARY := shuttle
+BINARY := baton
 VERSION := 0.1.0
 LDFLAGS := -ldflags "-s -w -X main.version=$(VERSION)"
 
@@ -23,4 +23,4 @@ install-remote:
 	mkdir -p /workspaces/.inbox
 	cp -f remote/grab.sh /usr/local/bin/grab
 	chmod +x /usr/local/bin/grab
-	@echo "Source remote/shuttle.plugin.zsh in your .zshrc for auto-detect"
+	@echo "Source remote/baton.plugin.zsh in your .zshrc for auto-detect"
