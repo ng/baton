@@ -18,12 +18,9 @@ type PortScanner struct {
 	active   map[int]PortInfo
 	excluded map[int]bool
 	pinned   map[int]bool
-	misses   map[int]int
 	stopCh   chan struct{}
 	events   chan PortEventMsg
 }
-
-const removeMissThreshold = 3
 
 // ssRe captures port and optional process name from ss -tlnp output.
 // Example: LISTEN 0 511 127.0.0.1:3001 0.0.0.0:* users:(("node",pid=42728,fd=28))
@@ -61,7 +58,6 @@ func NewPortScanner(cfg *Config, conn *Connection, extraPorts []int, reverseRemo
 		active:   make(map[int]PortInfo),
 		excluded: excluded,
 		pinned:   pinned,
-		misses:   make(map[int]int),
 		stopCh:   make(chan struct{}),
 		events:   make(chan PortEventMsg, 32),
 	}
@@ -223,35 +219,48 @@ func (ps *PortScanner) scan() {
 	defer ps.mu.Unlock()
 
 	for port, info := range discovered {
-		delete(ps.misses, port)
-		if _, exists := ps.active[port]; !exists {
-			if label := ps.cfg.PortLabel(ps.preset, port); label != "" {
-				info.Label = label
+		if existing, exists := ps.active[port]; exists {
+			if existing.Stale {
+				existing.Stale = false
+				ps.active[port] = existing
 			}
-			if err := ps.conn.Forward(port, port); err == nil {
-				ps.active[port] = info
-				ps.saveState()
-				ps.sendEvent(PortEventMsg{
-					Time:    time.Now(),
-					Port:    port,
-					Process: info.Process,
-					Action:  "forwarded",
-				})
-			}
+			continue
+		}
+		if label := ps.cfg.PortLabel(ps.preset, port); label != "" {
+			info.Label = label
+		}
+		if err := ps.conn.Forward(port, port); err == nil {
+			ps.active[port] = info
+			ps.saveState()
+			ps.sendEvent(PortEventMsg{
+				Time:    time.Now(),
+				Port:    port,
+				Process: info.Process,
+				Action:  "forwarded",
+			})
 		}
 	}
 
-	for port := range ps.active {
-		if _, exists := discovered[port]; !exists && !ps.pinned[port] {
-			ps.misses[port]++
-			if ps.misses[port] < removeMissThreshold {
-				continue
-			}
-			delete(ps.misses, port)
+	for port, info := range ps.active {
+		if ps.pinned[port] {
+			continue
+		}
+		if _, exists := discovered[port]; !exists && !info.Stale {
+			info.Stale = true
+			ps.active[port] = info
+		}
+	}
+}
+
+func (ps *PortScanner) SweepStale() []int {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	var swept []int
+	for port, info := range ps.active {
+		if info.Stale && !ps.pinned[port] {
 			if err := ps.conn.CancelForward(port, port); err == nil {
-				info := ps.active[port]
 				delete(ps.active, port)
-				ps.saveState()
+				swept = append(swept, port)
 				ps.sendEvent(PortEventMsg{
 					Time:    time.Now(),
 					Port:    port,
@@ -261,6 +270,10 @@ func (ps *PortScanner) scan() {
 			}
 		}
 	}
+	if len(swept) > 0 {
+		ps.saveState()
+	}
+	return swept
 }
 
 func (ps *PortScanner) saveState() {

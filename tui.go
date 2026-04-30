@@ -438,6 +438,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.portSelected--
 		}
 		return m, nil
+
+	case sweepResultMsg:
+		if len(msg.swept) > 0 {
+			m.addLog(time.Now(), fmt.Sprintf("swept %d stale port(s)", len(msg.swept)), "←")
+			m.localForwards = m.scanner.ActivePortInfos()
+			if m.portSelected >= m.portListLen() && m.portSelected > 0 {
+				m.portSelected--
+			}
+		} else {
+			m.addLog(time.Now(), "no stale ports to sweep", " ")
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -541,10 +553,27 @@ func (m model) updatePortFocus(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "d", "x", "backspace":
 		return m.disconnectSelectedPort()
+	case "c":
+		return m.sweepStalePorts()
 	case "q", "ctrl+c":
 		return m, tea.Quit
 	}
 	return m, nil
+}
+
+type sweepResultMsg struct {
+	swept []int
+}
+
+func (m model) sweepStalePorts() (tea.Model, tea.Cmd) {
+	if m.portFocus != 1 {
+		return m, nil
+	}
+	s := m.scanner
+	return m, func() tea.Msg {
+		swept := s.SweepStale()
+		return sweepResultMsg{swept: swept}
+	}
 }
 
 func (m model) portListLen() int {
@@ -780,10 +809,18 @@ func (m model) renderLocalPorts(width, height int) string {
 			pin = " \U0001F4CC"
 		}
 
+		stale := ""
+		if p.Stale {
+			stale = " " + yellowStyle.Render("⊘")
+		}
+
 		var line string
 		if hasTraffic {
 			port := activeStyle.Render(portStr)
 			line = fmt.Sprintf("%s%s  %s%s", port, pin, dimStyle.Render(desc), traffic)
+		} else if p.Stale {
+			port := dimStyle.Render(portStr)
+			line = fmt.Sprintf("%s%s  %s%s", port, pin, dimStyle.Render(desc), stale)
 		} else {
 			port := outStyle.Render(portStr)
 			line = fmt.Sprintf("%s%s  %s", port, pin, dimStyle.Render(desc))
@@ -847,7 +884,7 @@ func (m model) renderFooter() string {
 		if m.portFocus == 2 {
 			panel = "reverse tunnels"
 		}
-		return "  " + headerStyle.Render(panel) + "  " + dimStyle.Render("↑↓ select  tab switch  d disconnect  esc back")
+		return "  " + headerStyle.Render(panel) + "  " + dimStyle.Render("↑↓ select  tab switch  d disconnect  c sweep  esc back")
 	}
 	return dimStyle.Render("  ↑↓ scroll  tab ports  r reconnect  s send  f forward  t tray")
 }

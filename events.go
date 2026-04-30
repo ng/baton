@@ -7,6 +7,7 @@ type PortInfo struct {
 	Process string
 	Label   string
 	Pinned  bool
+	Stale   bool
 }
 
 type ConnEventMsg struct {
