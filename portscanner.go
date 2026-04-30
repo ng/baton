@@ -17,9 +17,12 @@ type PortScanner struct {
 	active   map[int]PortInfo
 	excluded map[int]bool
 	pinned   map[int]bool
+	misses   map[int]int
 	stopCh   chan struct{}
 	events   chan PortEventMsg
 }
+
+const removeMissThreshold = 3
 
 // ssRe captures port and optional process name from ss -tlnp output.
 // Example: LISTEN 0 511 127.0.0.1:3001 0.0.0.0:* users:(("node",pid=42728,fd=28))
@@ -56,6 +59,7 @@ func NewPortScanner(cfg *Config, conn *Connection, extraPorts []int, reverseRemo
 		active:   make(map[int]PortInfo),
 		excluded: excluded,
 		pinned:   pinned,
+		misses:   make(map[int]int),
 		stopCh:   make(chan struct{}),
 		events:   make(chan PortEventMsg, 32),
 	}
@@ -210,6 +214,7 @@ func (ps *PortScanner) scan() {
 	defer ps.mu.Unlock()
 
 	for port, info := range discovered {
+		delete(ps.misses, port)
 		if _, exists := ps.active[port]; !exists {
 			if err := ps.conn.Forward(port, port); err == nil {
 				ps.active[port] = info
@@ -226,6 +231,11 @@ func (ps *PortScanner) scan() {
 
 	for port := range ps.active {
 		if _, exists := discovered[port]; !exists && !ps.pinned[port] {
+			ps.misses[port]++
+			if ps.misses[port] < removeMissThreshold {
+				continue
+			}
+			delete(ps.misses, port)
 			if err := ps.conn.CancelForward(port, port); err == nil {
 				info := ps.active[port]
 				delete(ps.active, port)
