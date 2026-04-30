@@ -13,6 +13,7 @@ import (
 type PortScanner struct {
 	cfg      *Config
 	conn     *Connection
+	preset   string
 	mu       sync.RWMutex
 	active   map[int]PortInfo
 	excluded map[int]bool
@@ -44,7 +45,7 @@ func normalizeProcess(name string) string {
 	return name
 }
 
-func NewPortScanner(cfg *Config, conn *Connection, extraPorts []int, reverseRemotePorts []int) *PortScanner {
+func NewPortScanner(cfg *Config, conn *Connection, extraPorts []int, reverseRemotePorts []int, preset string) *PortScanner {
 	excluded := make(map[int]bool)
 	for _, p := range cfg.Ports.Exclude {
 		excluded[p] = true
@@ -56,6 +57,7 @@ func NewPortScanner(cfg *Config, conn *Connection, extraPorts []int, reverseRemo
 	ps := &PortScanner{
 		cfg:      cfg,
 		conn:     conn,
+		preset:   preset,
 		active:   make(map[int]PortInfo),
 		excluded: excluded,
 		pinned:   pinned,
@@ -68,12 +70,13 @@ func NewPortScanner(cfg *Config, conn *Connection, extraPorts []int, reverseRemo
 			continue
 		}
 		pinned[port] = true
+		label := cfg.PortLabel(preset, port)
 		if err := conn.Forward(port, port); err == nil {
-			ps.active[port] = PortInfo{Port: port, Process: "preset"}
+			ps.active[port] = PortInfo{Port: port, Label: label, Pinned: true}
 			ps.sendEvent(PortEventMsg{
 				Time:    time.Now(),
 				Port:    port,
-				Process: "preset",
+				Process: label,
 				Action:  "forwarded",
 			})
 		}
@@ -216,6 +219,9 @@ func (ps *PortScanner) scan() {
 	for port, info := range discovered {
 		delete(ps.misses, port)
 		if _, exists := ps.active[port]; !exists {
+			if label := ps.cfg.PortLabel(ps.preset, port); label != "" {
+				info.Label = label
+			}
 			if err := ps.conn.Forward(port, port); err == nil {
 				ps.active[port] = info
 				ps.saveState()

@@ -5,6 +5,8 @@ import "time"
 type PortInfo struct {
 	Port    int
 	Process string
+	Label   string
+	Pinned  bool
 }
 
 type ConnEventMsg struct {

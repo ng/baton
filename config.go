@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -35,10 +36,11 @@ type PortsConfig struct {
 }
 
 type PortPreset struct {
-	Ports   []int  `toml:"ports"`
-	Reverse []int  `toml:"reverse"`
-	Exclude []int  `toml:"exclude"`
-	Desc    string `toml:"desc"`
+	Ports   []int             `toml:"ports"`
+	Reverse []int             `toml:"reverse"`
+	Exclude []int             `toml:"exclude"`
+	Desc    string            `toml:"desc"`
+	Labels  map[string]string `toml:"labels"`
 }
 
 type duration struct {
@@ -72,6 +74,23 @@ func DefaultConfig() *Config {
 			"orchestra": {
 				Desc:    "Orchestra platform services",
 				Reverse: []int{443, 3000, 3306, 5432, 6007, 8000, 9000, 9010, 9020, 9030, 9040, 9050},
+				Ports:   []int{3001, 9001},
+				Labels: map[string]string{
+					"443":  "caddy",
+					"3000": "portcullis-ui",
+					"3001": "vite-ui",
+					"3306": "mysql",
+					"5432": "postgres",
+					"6007": "storybook",
+					"8000": "data-service",
+					"9000": "portcullis-api",
+					"9001": "portcullis-api-debug",
+					"9010": "protocoldescriber",
+					"9020": "entityresolver",
+					"9030": "labwareresolver",
+					"9040": "cellculturebatchresolver",
+					"9050": "experimentsresync",
+				},
 			},
 		},
 	}
@@ -153,6 +172,17 @@ func (c *Config) EffectiveExtra(preset string) []int {
 		}
 	}
 	return result
+}
+
+func (c *Config) PortLabel(preset string, port int) string {
+	if preset == "" {
+		return ""
+	}
+	p, ok := c.Presets[preset]
+	if !ok || p.Labels == nil {
+		return ""
+	}
+	return p.Labels[strconv.Itoa(port)]
 }
 
 func (c *Config) SaveSession(host, preset string) {

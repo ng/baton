@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -116,7 +117,7 @@ func runConnect(cfg *Config, host, preset string) {
 
 	conn := NewConnection(cfg, host, reversePorts)
 
-	scanner := NewPortScanner(cfg, conn, extraPorts, nil)
+	scanner := NewPortScanner(cfg, conn, extraPorts, nil, preset)
 	transferer := NewTransferer(cfg)
 	throughput := NewThroughputMonitor(conn, 2*time.Second)
 
@@ -136,7 +137,8 @@ func runConnect(cfg *Config, host, preset string) {
 			if port == 443 {
 				remotePort = 4443
 			}
-			reverseInfos = append(reverseInfos, PortInfo{Port: remotePort, Process: "preset"})
+			label := cfg.PortLabel(preset, port)
+			reverseInfos = append(reverseInfos, PortInfo{Port: remotePort, Label: label})
 			reverseRemotePorts = append(reverseRemotePorts, remotePort)
 		}
 
@@ -210,10 +212,20 @@ func runPresets(cfg *Config) {
 		}
 		fmt.Printf("  %s — %s\n", name, desc)
 		for _, p := range preset.Reverse {
-			fmt.Printf("    -R :%d (local → remote)\n", p)
+			label := preset.Labels[strconv.Itoa(p)]
+			if label != "" {
+				fmt.Printf("    -R :%d %s (local → remote)\n", p, label)
+			} else {
+				fmt.Printf("    -R :%d (local → remote)\n", p)
+			}
 		}
 		for _, p := range preset.Ports {
-			fmt.Printf("    -L :%d (remote → local)\n", p)
+			label := preset.Labels[strconv.Itoa(p)]
+			if label != "" {
+				fmt.Printf("    -L :%d %s (remote → local) 📌\n", p, label)
+			} else {
+				fmt.Printf("    -L :%d (remote → local) 📌\n", p)
+			}
 		}
 	}
 }

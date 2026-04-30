@@ -398,7 +398,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		for _, info := range msg.reverseInfos {
 			m.reverseTunnels = append(m.reverseTunnels, info)
-			m.addLog(now, fmt.Sprintf("reverse :%d forwarded (%s)", info.Port, info.Process), "←")
+			desc := info.Label
+			if desc == "" {
+				desc = "preset"
+			}
+			m.addLog(now, fmt.Sprintf("reverse :%d forwarded (%s)", info.Port, desc), "←")
 		}
 		return m, nil
 
@@ -764,18 +768,24 @@ func (m model) renderLocalPorts(width, height int) string {
 		}
 
 		portStr := fmt.Sprintf(":%d", p.Port)
-		proc := p.Process
-		if proc == "" {
-			proc = "(unknown)"
+		desc := p.Label
+		if desc == "" {
+			desc = p.Process
+		}
+		if desc == "" {
+			desc = "(unknown)"
+		}
+		if p.Pinned {
+			desc = "\U0001F4CC " + desc
 		}
 
 		var line string
 		if hasTraffic {
 			port := activeStyle.Render(portStr)
-			line = fmt.Sprintf("%s  %s%s", port, dimStyle.Render(proc), traffic)
+			line = fmt.Sprintf("%s  %s%s", port, dimStyle.Render(desc), traffic)
 		} else {
 			port := outStyle.Render(portStr)
-			line = fmt.Sprintf("%s  %s", port, dimStyle.Render(proc))
+			line = fmt.Sprintf("%s  %s", port, dimStyle.Render(desc))
 		}
 
 		if focused && i == m.portSelected {
@@ -802,9 +812,12 @@ func (m model) renderRemotePorts(width, height int) string {
 	}
 	for i, p := range m.reverseTunnels {
 		port := inStyle.Render(fmt.Sprintf(":%d", p.Port))
-		proc := dimStyle.Render(p.Process)
+		desc := p.Label
+		if desc == "" {
+			desc = p.Process
+		}
 
-		line := fmt.Sprintf("%s  %s", port, proc)
+		line := fmt.Sprintf("%s  %s", port, dimStyle.Render(desc))
 		if focused && i == m.portSelected {
 			lines = append(lines, portStyle.Render(headerStyle.Render("▸ ")+line))
 		} else {
