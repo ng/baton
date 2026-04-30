@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -212,6 +213,9 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
 		if msg.Paste {
 			m.pasting = true
 			m.pasteBuffer += msg.String()
@@ -241,7 +245,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updatePortFocus(msg)
 		}
 		switch msg.String() {
-		case "q", "ctrl+c":
+		case "q":
 			return m, tea.Quit
 		case "r":
 			m.autoReconnect = !m.autoReconnect
@@ -264,6 +268,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.portFocus = 1
 			m.portSelected = 0
 			return m, nil
+		case "t":
+			return m, func() tea.Msg {
+				exec.Command("baton-tray").Start()
+				return nil
+			}
 		}
 		var cmd tea.Cmd
 		m.logViewport, cmd = m.logViewport.Update(msg)
@@ -782,7 +791,7 @@ func (m model) renderFooter() string {
 		}
 		return "  " + headerStyle.Render(panel) + "  " + dimStyle.Render("↑↓ select  tab switch  d disconnect  esc back")
 	}
-	return dimStyle.Render("  ↑↓ scroll  tab ports  r reconnect  s send  f forward  q quit")
+	return dimStyle.Render("  ↑↓ scroll  tab ports  r reconnect  s send  f forward  t tray  q quit")
 }
 
 func formatDuration(d time.Duration) string {
