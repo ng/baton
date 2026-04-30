@@ -35,6 +35,7 @@ type PortsConfig struct {
 
 type PortPreset struct {
 	Ports   []int  `toml:"ports"`
+	Reverse []int  `toml:"reverse"`
 	Exclude []int  `toml:"exclude"`
 	Desc    string `toml:"desc"`
 }
@@ -64,8 +65,8 @@ func DefaultConfig() *Config {
 		},
 		Presets: map[string]PortPreset{
 			"orchestra": {
-				Desc:  "Orchestra platform services",
-				Ports: []int{443, 3000, 3306, 5432, 6007, 8000, 9000, 9010, 9020, 9030, 9040, 9050},
+				Desc:    "Orchestra platform services",
+				Reverse: []int{443, 3000, 3306, 5432, 6007, 8000, 9000, 9010, 9020, 9030, 9040, 9050},
 			},
 		},
 	}
@@ -118,6 +119,25 @@ func (c *Config) EffectiveExtra(preset string) []int {
 				seen[p] = true
 				result = append(result, p)
 			}
+		}
+	}
+	return result
+}
+
+func (c *Config) EffectiveReverse(preset string) []int {
+	if preset == "" {
+		return nil
+	}
+	p, ok := c.Presets[preset]
+	if !ok {
+		return nil
+	}
+	seen := make(map[int]bool)
+	var result []int
+	for _, port := range p.Reverse {
+		if !seen[port] {
+			seen[port] = true
+			result = append(result, port)
 		}
 	}
 	return result

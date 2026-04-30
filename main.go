@@ -107,11 +107,25 @@ func runConnect(cfg *Config, host, preset string) {
 	}
 
 	extraPorts := cfg.EffectiveExtra(preset)
+	reversePorts := cfg.EffectiveReverse(preset)
 	if preset != "" {
 		if _, ok := cfg.Presets[preset]; !ok {
 			fmt.Fprintf(os.Stderr, "warning: unknown preset %q\n", preset)
 		} else {
 			fmt.Fprintf(os.Stderr, "using preset: %s\n", preset)
+		}
+	}
+
+	var reverseInfos []PortInfo
+	for _, port := range reversePorts {
+		remotePort := port
+		if port == 443 {
+			remotePort = 4443
+		}
+		if err := conn.ReverseForward(remotePort, port); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: reverse forward :%d failed: %v\n", port, err)
+		} else {
+			reverseInfos = append(reverseInfos, PortInfo{Port: remotePort, Process: "preset"})
 		}
 	}
 
@@ -123,7 +137,7 @@ func runConnect(cfg *Config, host, preset string) {
 	throughput := NewThroughputMonitor(conn, 2*time.Second)
 	go throughput.Run()
 
-	m := newModel(cfg, conn, scanner, transferer, throughput, preset)
+	m := newModel(cfg, conn, scanner, transferer, throughput, preset, reverseInfos)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {

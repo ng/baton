@@ -147,6 +147,26 @@ func (c *Connection) CancelForward(localPort, remotePort int) error {
 	return cmd.Run()
 }
 
+func (c *Connection) ReverseForward(remotePort, localPort int) error {
+	cmd := exec.Command("ssh",
+		"-S", c.cfg.Connection.ControlSocket,
+		"-O", "forward",
+		"-R", fmt.Sprintf("%d:localhost:%d", remotePort, localPort),
+		c.host,
+	)
+	return cmd.Run()
+}
+
+func (c *Connection) CancelReverseForward(remotePort, localPort int) error {
+	cmd := exec.Command("ssh",
+		"-S", c.cfg.Connection.ControlSocket,
+		"-O", "cancel",
+		"-R", fmt.Sprintf("%d:localhost:%d", remotePort, localPort),
+		c.host,
+	)
+	return cmd.Run()
+}
+
 func (c *Connection) SetAutoReconnect(on bool) {
 	c.mu.Lock()
 	c.autoReconnect = on

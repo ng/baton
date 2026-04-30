@@ -101,7 +101,7 @@ type model struct {
 	portTrafficEvents <-chan PortTrafficMsg
 }
 
-func newModel(cfg *Config, conn *Connection, scanner *PortScanner, transferer *Transferer, throughput *ThroughputMonitor, preset string) model {
+func newModel(cfg *Config, conn *Connection, scanner *PortScanner, transferer *Transferer, throughput *ThroughputMonitor, preset string, reverseInfos []PortInfo) model {
 	vp := viewport.New(80, 10)
 	vp.SetContent("")
 
@@ -109,6 +109,11 @@ func newModel(cfg *Config, conn *Connection, scanner *PortScanner, transferer *T
 	if localName == "" {
 		localName = "local"
 	}
+
+	tunnels := []PortInfo{
+		{Port: cfg.Connection.ReversePort, Process: "ssh"},
+	}
+	tunnels = append(tunnels, reverseInfos...)
 
 	return model{
 		connected:   true,
@@ -119,11 +124,9 @@ func newModel(cfg *Config, conn *Connection, scanner *PortScanner, transferer *T
 		autoReconnect: true,
 		conn:          conn,
 
-		reverseTunnels: []PortInfo{
-			{Port: cfg.Connection.ReversePort, Process: "ssh-reverse"},
-		},
-		scanner:    scanner,
-		transferer: transferer,
+		reverseTunnels: tunnels,
+		scanner:        scanner,
+		transferer:     transferer,
 
 		logViewport: vp,
 		logEntries:  initialLogEntries(conn.host, preset, cfg),
@@ -484,7 +487,7 @@ func (m model) View() string {
 
 	var sections []string
 	sections = append(sections, m.renderHeader())
-	sections = append(sections, "")
+	sections = append(sections, dimStyle.Render(strings.Repeat("─", m.width)))
 	sections = append(sections, m.renderNetwork())
 	sections = append(sections, "")
 	sections = append(sections, m.renderBottomPanes())
@@ -696,15 +699,24 @@ func initialLogEntries(host, preset string, cfg *Config) []logEntry {
 	}
 	if preset != "" {
 		if p, ok := cfg.Presets[preset]; ok {
-			ports := make([]string, len(p.Ports))
-			for i, port := range p.Ports {
-				ports[i] = fmt.Sprintf(":%d", port)
+			var parts []string
+			for _, port := range p.Reverse {
+				remotePort := port
+				if port == 443 {
+					remotePort = 4443
+				}
+				parts = append(parts, fmt.Sprintf(":%d", remotePort))
 			}
-			entries = append(entries, logEntry{
-				Time:      now,
-				Message:   fmt.Sprintf("preset %s: %s", preset, strings.Join(ports, " ")),
-				Direction: "→",
-			})
+			for _, port := range p.Ports {
+				parts = append(parts, fmt.Sprintf(":%d", port))
+			}
+			if len(parts) > 0 {
+				entries = append(entries, logEntry{
+					Time:      now,
+					Message:   fmt.Sprintf("preset %s: %s", preset, strings.Join(parts, " ")),
+					Direction: "→",
+				})
+			}
 		}
 	}
 	if len(cfg.Ports.Extra) > 0 {
