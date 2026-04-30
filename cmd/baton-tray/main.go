@@ -141,12 +141,6 @@ func handleSend() {
 }
 
 func handleForward() {
-	portStr, err := dialog.Message("Enter port number to forward:").Title("Forward Port").YesNo()
-	if err || !portStr {
-		return
-	}
-	// dialog doesn't have text input, so we use a simpler approach
-	// User can use the TUI 'f' key for interactive port forwarding
 	dialog.Message("Use 'f' key in the baton TUI to forward ports interactively,\nor add ports to ~/.baton.toml under [ports] extra = [...]").Info()
 }
 

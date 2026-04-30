@@ -80,6 +80,14 @@ func NewPortScanner(cfg *Config, conn *Connection, extraPorts []int, reverseRemo
 	return ps
 }
 
+func (ps *PortScanner) AddExclusions(ports []int) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	for _, p := range ports {
+		ps.excluded[p] = true
+	}
+}
+
 func (ps *PortScanner) Run() {
 	ps.scan()
 

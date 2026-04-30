@@ -56,3 +56,9 @@ type PortTrafficMsg struct {
 }
 
 type TickMsg time.Time
+
+type connectResultMsg struct {
+	err          error
+	reverseInfos []PortInfo
+	reversePorts []int
+}

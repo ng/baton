@@ -104,47 +104,50 @@ Config: .baton.toml (local) or ~/.baton.toml
 func runConnect(cfg *Config, host, preset string) {
 	conn := NewConnection(cfg, host)
 
-	fmt.Fprintf(os.Stderr, "connecting to %s...\n", host)
-	if err := conn.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "connection failed: %v\n", err)
-		os.Exit(1)
+	if preset != "" {
+		if _, ok := cfg.Presets[preset]; !ok {
+			fmt.Fprintf(os.Stderr, "warning: unknown preset %q\n", preset)
+		}
 	}
 
 	extraPorts := cfg.EffectiveExtra(preset)
 	reversePorts := cfg.EffectiveReverse(preset)
-	if preset != "" {
-		if _, ok := cfg.Presets[preset]; !ok {
-			fmt.Fprintf(os.Stderr, "warning: unknown preset %q\n", preset)
-		} else {
-			fmt.Fprintf(os.Stderr, "using preset: %s\n", preset)
-		}
-	}
 
-	var reverseInfos []PortInfo
-	var reverseRemotePorts []int
-	for _, port := range reversePorts {
-		remotePort := port
-		if port == 443 {
-			remotePort = 4443
-		}
-		if err := conn.ReverseForward(remotePort, port); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: reverse forward :%d failed: %v\n", port, err)
-		} else {
-			reverseInfos = append(reverseInfos, PortInfo{Port: remotePort, Process: "preset"})
-			reverseRemotePorts = append(reverseRemotePorts, remotePort)
-		}
-	}
-
-	scanner := NewPortScanner(cfg, conn, extraPorts, reverseRemotePorts)
-	go scanner.Run()
-
+	scanner := NewPortScanner(cfg, conn, extraPorts, nil)
 	transferer := NewTransferer(cfg)
-
 	throughput := NewThroughputMonitor(conn, 2*time.Second)
-	go throughput.Run()
 
-	m := newModel(cfg, conn, scanner, transferer, throughput, preset, reverseInfos)
+	m := newModel(cfg, conn, scanner, transferer, throughput, preset, nil)
 	p := tea.NewProgram(m, tea.WithAltScreen())
+
+	go func() {
+		if err := conn.Start(); err != nil {
+			p.Send(connectResultMsg{err: err})
+			return
+		}
+
+		var reverseInfos []PortInfo
+		var reverseRemotePorts []int
+		for _, port := range reversePorts {
+			remotePort := port
+			if port == 443 {
+				remotePort = 4443
+			}
+			if err := conn.ReverseForward(remotePort, port); err == nil {
+				reverseInfos = append(reverseInfos, PortInfo{Port: remotePort, Process: "preset"})
+				reverseRemotePorts = append(reverseRemotePorts, remotePort)
+			}
+		}
+
+		scanner.AddExclusions(reverseRemotePorts)
+		go scanner.Run()
+		go throughput.Run()
+
+		p.Send(connectResultMsg{
+			reverseInfos: reverseInfos,
+			reversePorts: reverseRemotePorts,
+		})
+	}()
 
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)

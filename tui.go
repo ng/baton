@@ -62,6 +62,8 @@ type model struct {
 	host        string
 	localHost   string
 	connectedAt time.Time
+	preset      string
+	cfg         *Config
 
 	autoReconnect bool
 	conn          *Connection
@@ -119,11 +121,17 @@ func newModel(cfg *Config, conn *Connection, scanner *PortScanner, transferer *T
 	}
 	tunnels = append(tunnels, reverseInfos...)
 
+	now := time.Now()
+	entries := []logEntry{
+		{Time: now, Message: "connecting to " + conn.host + "...", Direction: "🔄"},
+	}
+
 	return model{
-		connected:   true,
+		connected:   false,
 		host:        conn.host,
 		localHost:   shortName(localName),
-		connectedAt: conn.StartTime,
+		preset:      preset,
+		cfg:         cfg,
 
 		autoReconnect: true,
 		conn:          conn,
@@ -133,7 +141,7 @@ func newModel(cfg *Config, conn *Connection, scanner *PortScanner, transferer *T
 		transferer:     transferer,
 
 		logViewport: vp,
-		logEntries:  initialLogEntries(conn.host, preset, cfg),
+		logEntries:  entries,
 
 		portTraffic: make(map[int]PortTrafficInfo),
 		inboxPath:   cfg.Transfer.Inbox,
@@ -360,6 +368,39 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.portTraffic[port] = info
 		}
 		return m, waitForPortTraffic(m.portTrafficEvents)
+
+	case connectResultMsg:
+		if msg.err != nil {
+			m.addLog(time.Now(), fmt.Sprintf("connection failed: %v", msg.err), "🔴")
+			return m, nil
+		}
+		now := time.Now()
+		m.connected = true
+		m.connectedAt = now
+		m.addLog(now, "connected to "+m.host, "🟢")
+		if m.preset != "" {
+			if p, ok := m.cfg.Presets[m.preset]; ok {
+				var parts []string
+				for _, port := range p.Reverse {
+					rp := port
+					if port == 443 {
+						rp = 4443
+					}
+					parts = append(parts, fmt.Sprintf(":%d", rp))
+				}
+				for _, port := range p.Ports {
+					parts = append(parts, fmt.Sprintf(":%d", port))
+				}
+				if len(parts) > 0 {
+					m.addLog(now, fmt.Sprintf("preset %s: %s", m.preset, strings.Join(parts, " ")), "→")
+				}
+			}
+		}
+		for _, info := range msg.reverseInfos {
+			m.reverseTunnels = append(m.reverseTunnels, info)
+			m.addLog(now, fmt.Sprintf("reverse :%d forwarded (%s)", info.Port, info.Process), "←")
+		}
+		return m, nil
 
 	case sendResultMsg:
 		if msg.err != nil {
