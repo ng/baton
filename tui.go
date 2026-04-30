@@ -89,6 +89,9 @@ type model struct {
 	pasteBuffer string
 	pasting     bool
 
+	portFocus    int // 0=none, 1=local forwards, 2=reverse tunnels
+	portSelected int
+
 	userScrolled bool
 
 	width  int
@@ -189,6 +192,12 @@ type fwdResultMsg struct {
 	err  error
 }
 
+type disconnectResultMsg struct {
+	port    int
+	reverse bool
+	err     error
+}
+
 func (m model) Init() tea.Cmd {
 	return tea.Batch(
 		waitForConnEvent(m.connEvents),
@@ -228,6 +237,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.fwdMode {
 			return m.updateFwdMode(msg)
 		}
+		if m.portFocus > 0 {
+			return m.updatePortFocus(msg)
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -247,6 +259,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "f":
 			m.fwdMode = true
 			m.fwdInput = ""
+			return m, nil
+		case "tab":
+			m.portFocus = 1
+			m.portSelected = 0
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -349,6 +365,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.addLog(time.Now(), fmt.Sprintf("forwarding local :%d", msg.port), "→")
 		}
 		return m, nil
+
+	case disconnectResultMsg:
+		if msg.err != nil {
+			m.addLog(time.Now(), fmt.Sprintf("disconnect :%d failed: %v", msg.port, msg.err), "✕")
+		} else {
+			m.addLog(time.Now(), fmt.Sprintf("disconnected :%d", msg.port), "←")
+			if msg.reverse {
+				for i, p := range m.reverseTunnels {
+					if p.Port == msg.port {
+						m.reverseTunnels = append(m.reverseTunnels[:i], m.reverseTunnels[i+1:]...)
+						break
+					}
+				}
+			}
+		}
+		if m.portSelected >= m.portListLen() && m.portSelected > 0 {
+			m.portSelected--
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -423,6 +458,72 @@ func (m model) updateFwdMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+}
+
+func (m model) updatePortFocus(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.portFocus = 0
+		m.portSelected = 0
+		return m, nil
+	case "tab":
+		if m.portFocus == 1 {
+			m.portFocus = 2
+		} else {
+			m.portFocus = 1
+		}
+		m.portSelected = 0
+		return m, nil
+	case "up", "k":
+		if m.portSelected > 0 {
+			m.portSelected--
+		}
+		return m, nil
+	case "down", "j":
+		max := m.portListLen() - 1
+		if m.portSelected < max {
+			m.portSelected++
+		}
+		return m, nil
+	case "d", "x", "backspace":
+		return m.disconnectSelectedPort()
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+func (m model) portListLen() int {
+	if m.portFocus == 1 {
+		return len(m.localForwards)
+	}
+	return len(m.reverseTunnels)
+}
+
+func (m model) disconnectSelectedPort() (tea.Model, tea.Cmd) {
+	if m.portFocus == 1 && m.portSelected < len(m.localForwards) {
+		p := m.localForwards[m.portSelected]
+		c := m.conn
+		port := p.Port
+		return m, func() tea.Msg {
+			err := c.CancelForward(port, port)
+			return disconnectResultMsg{port: port, reverse: false, err: err}
+		}
+	}
+	if m.portFocus == 2 && m.portSelected < len(m.reverseTunnels) {
+		p := m.reverseTunnels[m.portSelected]
+		if p.Process == "ssh" {
+			m.addLog(time.Now(), "cannot disconnect SSH reverse tunnel", "✕")
+			return m, nil
+		}
+		c := m.conn
+		port := p.Port
+		return m, func() tea.Msg {
+			err := c.CancelReverseForward(port, port)
+			return disconnectResultMsg{port: port, reverse: true, err: err}
+		}
+	}
+	return m, nil
 }
 
 func (m *model) addLog(t time.Time, msg string, direction string) {
@@ -591,12 +692,17 @@ func (m model) renderPortsColumn(width, height int) string {
 }
 
 func (m model) renderLocalPorts(width, height int) string {
-	header := sectionTitle.Render(shortName(m.host)) + " " + outStyle.Render("→") + " " + sectionTitle.Render(m.localHost)
+	focused := m.portFocus == 1
+	headerArrow := outStyle.Render("→")
+	if focused {
+		headerArrow = headerStyle.Render("→")
+	}
+	header := sectionTitle.Render(shortName(m.host)) + " " + headerArrow + " " + sectionTitle.Render(m.localHost)
 	var lines []string
 	if len(m.localForwards) == 0 {
 		lines = append(lines, portStyle.Render(dimStyle.Render("scanning...")))
 	}
-	for _, p := range m.localForwards {
+	for i, p := range m.localForwards {
 		hasTraffic := false
 		traffic := ""
 		if t, ok := m.portTraffic[p.Port]; ok {
@@ -613,12 +719,19 @@ func (m model) renderLocalPorts(width, height int) string {
 			proc = "(unknown)"
 		}
 
+		var line string
 		if hasTraffic {
 			port := activeStyle.Render(portStr)
-			lines = append(lines, portStyle.Render(fmt.Sprintf("%s %s  %s%s", outStyle.Render("→"), port, dimStyle.Render(proc), traffic)))
+			line = fmt.Sprintf("%s  %s%s", port, dimStyle.Render(proc), traffic)
 		} else {
 			port := outStyle.Render(portStr)
-			lines = append(lines, portStyle.Render(fmt.Sprintf("%s %s  %s", outStyle.Render("→"), port, dimStyle.Render(proc))))
+			line = fmt.Sprintf("%s  %s", port, dimStyle.Render(proc))
+		}
+
+		if focused && i == m.portSelected {
+			lines = append(lines, portStyle.Render(headerStyle.Render("▸ ")+line))
+		} else {
+			lines = append(lines, portStyle.Render("  "+line))
 		}
 	}
 
@@ -627,15 +740,26 @@ func (m model) renderLocalPorts(width, height int) string {
 }
 
 func (m model) renderRemotePorts(width, height int) string {
-	header := sectionTitle.Render(m.localHost) + " " + inStyle.Render("→") + " " + sectionTitle.Render(shortName(m.host))
+	focused := m.portFocus == 2
+	headerArrow := inStyle.Render("→")
+	if focused {
+		headerArrow = headerStyle.Render("→")
+	}
+	header := sectionTitle.Render(m.localHost) + " " + headerArrow + " " + sectionTitle.Render(shortName(m.host))
 	var lines []string
 	if len(m.reverseTunnels) == 0 {
 		lines = append(lines, portStyle.Render(dimStyle.Render("none")))
 	}
-	for _, p := range m.reverseTunnels {
+	for i, p := range m.reverseTunnels {
 		port := inStyle.Render(fmt.Sprintf(":%d", p.Port))
 		proc := dimStyle.Render(p.Process)
-		lines = append(lines, portStyle.Render(fmt.Sprintf("%s %s  %s", inStyle.Render("←"), port, proc)))
+
+		line := fmt.Sprintf("%s  %s", port, proc)
+		if focused && i == m.portSelected {
+			lines = append(lines, portStyle.Render(headerStyle.Render("▸ ")+line))
+		} else {
+			lines = append(lines, portStyle.Render("  "+line))
+		}
 	}
 
 	content := header + "\n" + strings.Join(lines, "\n")
@@ -651,7 +775,14 @@ func (m model) renderFooter() string {
 		cursor := outStyle.Render("█")
 		return "  " + outStyle.Render("forward local port:") + " " + m.fwdInput + cursor + "  " + dimStyle.Render("enter forward  esc cancel")
 	}
-	return dimStyle.Render("  ↑↓ scroll  r reconnect  s send  f forward  q quit")
+	if m.portFocus > 0 {
+		panel := "local forwards"
+		if m.portFocus == 2 {
+			panel = "reverse tunnels"
+		}
+		return "  " + headerStyle.Render(panel) + "  " + dimStyle.Render("↑↓ select  tab switch  d disconnect  esc back")
+	}
+	return dimStyle.Render("  ↑↓ scroll  tab ports  r reconnect  s send  f forward  q quit")
 }
 
 func formatDuration(d time.Duration) string {

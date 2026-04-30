@@ -73,6 +73,19 @@ func DefaultConfig() *Config {
 }
 
 func LoadConfig() (*Config, error) {
+	cfg := DefaultConfig()
+
+	localPath := ".baton.toml"
+	if data, err := os.ReadFile(localPath); err == nil {
+		if err := toml.Unmarshal(data, cfg); err != nil {
+			return nil, fmt.Errorf("parsing %s: %w", localPath, err)
+		}
+		if cfg.Transfer.MacUser == "" {
+			cfg.Transfer.MacUser = os.Getenv("USER")
+		}
+		return cfg, nil
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
@@ -84,7 +97,6 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 
-	cfg := DefaultConfig()
 	if err := toml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
@@ -94,6 +106,20 @@ func LoadConfig() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func WriteDefaultConfig(path string) error {
+	cfg := DefaultConfig()
+	return WriteConfig(cfg, path)
+}
+
+func WriteConfig(cfg *Config, path string) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return toml.NewEncoder(f).Encode(cfg)
 }
 
 func (c *Config) ExtraPortsForPreset(name string) []int {

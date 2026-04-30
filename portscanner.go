@@ -41,9 +41,12 @@ func normalizeProcess(name string) string {
 	return name
 }
 
-func NewPortScanner(cfg *Config, conn *Connection, extraPorts []int) *PortScanner {
+func NewPortScanner(cfg *Config, conn *Connection, extraPorts []int, reverseRemotePorts []int) *PortScanner {
 	excluded := make(map[int]bool)
 	for _, p := range cfg.Ports.Exclude {
+		excluded[p] = true
+	}
+	for _, p := range reverseRemotePorts {
 		excluded[p] = true
 	}
 	pinned := make(map[int]bool)

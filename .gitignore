@@ -1,4 +1,5 @@
 /baton
 /baton-*
 *.exe
+.baton.toml
 !cmd/

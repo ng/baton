@@ -109,7 +109,7 @@ func TestPortScannerExclude(t *testing.T) {
 	cfg.Ports.Exclude = []int{22, 8080, 19222}
 
 	conn := &Connection{}
-	ps := NewPortScanner(cfg, conn, nil)
+	ps := NewPortScanner(cfg, conn, nil, nil)
 
 	if !ps.excluded[22] {
 		t.Error("port 22 should be excluded")

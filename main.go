@@ -71,6 +71,9 @@ func main() {
 	case "presets":
 		runPresets(cfg)
 
+	case "init":
+		runInit()
+
 	case "version":
 		fmt.Printf("baton %s\n", version)
 
@@ -89,11 +92,12 @@ Usage:
   baton send <file> [dest]                 Upload file to remote
   baton ports                              List forwarded ports
   baton presets                            List available port presets
+  baton init                               Write default .baton.toml to current dir
   baton status                             Show connection status
   baton disconnect                         Clean shutdown
   baton version                            Print version
 
-Config: ~/.baton.toml
+Config: .baton.toml (local) or ~/.baton.toml
 `, version)
 }
 
@@ -117,6 +121,7 @@ func runConnect(cfg *Config, host, preset string) {
 	}
 
 	var reverseInfos []PortInfo
+	var reverseRemotePorts []int
 	for _, port := range reversePorts {
 		remotePort := port
 		if port == 443 {
@@ -126,10 +131,11 @@ func runConnect(cfg *Config, host, preset string) {
 			fmt.Fprintf(os.Stderr, "warning: reverse forward :%d failed: %v\n", port, err)
 		} else {
 			reverseInfos = append(reverseInfos, PortInfo{Port: remotePort, Process: "preset"})
+			reverseRemotePorts = append(reverseRemotePorts, remotePort)
 		}
 	}
 
-	scanner := NewPortScanner(cfg, conn, extraPorts)
+	scanner := NewPortScanner(cfg, conn, extraPorts, reverseRemotePorts)
 	go scanner.Run()
 
 	transferer := NewTransferer(cfg)
@@ -199,10 +205,26 @@ func runPresets(cfg *Config) {
 			desc = "no description"
 		}
 		fmt.Printf("  %s — %s\n", name, desc)
+		for _, p := range preset.Reverse {
+			fmt.Printf("    -R :%d (local → remote)\n", p)
+		}
 		for _, p := range preset.Ports {
-			fmt.Printf("    :%d\n", p)
+			fmt.Printf("    -L :%d (remote → local)\n", p)
 		}
 	}
+}
+
+func runInit() {
+	path := ".baton.toml"
+	if _, err := os.Stat(path); err == nil {
+		fmt.Fprintf(os.Stderr, "%s already exists\n", path)
+		os.Exit(1)
+	}
+	if err := WriteDefaultConfig(path); err != nil {
+		fmt.Fprintf(os.Stderr, "error writing %s: %v\n", path, err)
+		os.Exit(1)
+	}
+	fmt.Printf("wrote %s\n", path)
 }
 
 func runStatus(cfg *Config) {
