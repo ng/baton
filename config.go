@@ -10,9 +10,10 @@ import (
 )
 
 type Config struct {
-	Connection ConnectionConfig `toml:"connection"`
-	Transfer   TransferConfig   `toml:"transfer"`
-	Ports      PortsConfig      `toml:"ports"`
+	Connection ConnectionConfig      `toml:"connection"`
+	Transfer   TransferConfig        `toml:"transfer"`
+	Ports      PortsConfig           `toml:"ports"`
+	Presets    map[string]PortPreset `toml:"presets"`
 }
 
 type ConnectionConfig struct {
@@ -29,6 +30,13 @@ type TransferConfig struct {
 type PortsConfig struct {
 	ScanInterval duration `toml:"scan_interval"`
 	Exclude      []int    `toml:"exclude"`
+	Extra        []int    `toml:"extra"`
+}
+
+type PortPreset struct {
+	Ports   []int  `toml:"ports"`
+	Exclude []int  `toml:"exclude"`
+	Desc    string `toml:"desc"`
 }
 
 type duration struct {
@@ -53,6 +61,12 @@ func DefaultConfig() *Config {
 		Ports: PortsConfig{
 			ScanInterval: duration{3 * time.Second},
 			Exclude:      []int{22, 19222},
+		},
+		Presets: map[string]PortPreset{
+			"orchestra": {
+				Desc:  "Orchestra platform services",
+				Ports: []int{3000, 3306, 5432, 9000, 9010, 9020, 9030, 9040, 9050},
+			},
 		},
 	}
 }
@@ -79,4 +93,32 @@ func LoadConfig() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func (c *Config) ExtraPortsForPreset(name string) []int {
+	preset, ok := c.Presets[name]
+	if !ok {
+		return nil
+	}
+	return preset.Ports
+}
+
+func (c *Config) EffectiveExtra(preset string) []int {
+	seen := make(map[int]bool)
+	var result []int
+	for _, p := range c.Ports.Extra {
+		if !seen[p] {
+			seen[p] = true
+			result = append(result, p)
+		}
+	}
+	if preset != "" {
+		for _, p := range c.ExtraPortsForPreset(preset) {
+			if !seen[p] {
+				seen[p] = true
+				result = append(result, p)
+			}
+		}
+	}
+	return result
 }

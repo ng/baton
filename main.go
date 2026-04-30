@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -25,14 +26,27 @@ func main() {
 	switch os.Args[1] {
 	case "connect":
 		if len(os.Args) < 3 && cfg.Connection.Host == "" {
-			fmt.Fprintln(os.Stderr, "usage: baton connect <host>")
+			fmt.Fprintln(os.Stderr, "usage: baton connect <host> [--preset <name>]")
 			os.Exit(1)
 		}
 		host := cfg.Connection.Host
-		if len(os.Args) >= 3 {
-			host = os.Args[2]
+		preset := ""
+		args := os.Args[2:]
+		for i := 0; i < len(args); i++ {
+			if args[i] == "--preset" && i+1 < len(args) {
+				preset = args[i+1]
+				i++
+			} else if !strings.HasPrefix(args[i], "-") && host == "" {
+				host = args[i]
+			} else if !strings.HasPrefix(args[i], "-") {
+				host = args[i]
+			}
 		}
-		runConnect(cfg, host)
+		if host == "" {
+			fmt.Fprintln(os.Stderr, "usage: baton connect <host> [--preset <name>]")
+			os.Exit(1)
+		}
+		runConnect(cfg, host, preset)
 
 	case "send":
 		if len(os.Args) < 3 {
@@ -54,6 +68,9 @@ func main() {
 	case "disconnect":
 		runDisconnect(cfg)
 
+	case "presets":
+		runPresets(cfg)
+
 	case "version":
 		fmt.Printf("baton %s\n", version)
 
@@ -68,18 +85,19 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, `baton %s — Mac ↔ Gitpod bridge
 
 Usage:
-  baton connect <host>       Start SSH connection with TUI dashboard
-  baton send <file> [dest]   Upload file to remote
-  baton ports                List forwarded ports
-  baton status               Show connection status
-  baton disconnect           Clean shutdown
-  baton version              Print version
+  baton connect <host> [--preset <name>]   Start SSH connection with TUI dashboard
+  baton send <file> [dest]                 Upload file to remote
+  baton ports                              List forwarded ports
+  baton presets                            List available port presets
+  baton status                             Show connection status
+  baton disconnect                         Clean shutdown
+  baton version                            Print version
 
 Config: ~/.baton.toml
 `, version)
 }
 
-func runConnect(cfg *Config, host string) {
+func runConnect(cfg *Config, host, preset string) {
 	conn := NewConnection(cfg, host)
 
 	fmt.Fprintf(os.Stderr, "connecting to %s...\n", host)
@@ -88,7 +106,16 @@ func runConnect(cfg *Config, host string) {
 		os.Exit(1)
 	}
 
-	scanner := NewPortScanner(cfg, conn)
+	extraPorts := cfg.EffectiveExtra(preset)
+	if preset != "" {
+		if _, ok := cfg.Presets[preset]; !ok {
+			fmt.Fprintf(os.Stderr, "warning: unknown preset %q\n", preset)
+		} else {
+			fmt.Fprintf(os.Stderr, "using preset: %s\n", preset)
+		}
+	}
+
+	scanner := NewPortScanner(cfg, conn, extraPorts)
 	go scanner.Run()
 
 	transferer := NewTransferer(cfg)
@@ -144,6 +171,23 @@ func runPorts(cfg *Config) {
 	fmt.Println("forwarded ports:")
 	for _, p := range ports {
 		fmt.Printf("  localhost:%d → remote:%d\n", p, p)
+	}
+}
+
+func runPresets(cfg *Config) {
+	if len(cfg.Presets) == 0 {
+		fmt.Println("no presets configured")
+		return
+	}
+	for name, preset := range cfg.Presets {
+		desc := preset.Desc
+		if desc == "" {
+			desc = "no description"
+		}
+		fmt.Printf("  %s — %s\n", name, desc)
+		for _, p := range preset.Ports {
+			fmt.Printf("    :%d\n", p)
+		}
 	}
 }
 

@@ -40,12 +40,12 @@ func normalizeProcess(name string) string {
 	return name
 }
 
-func NewPortScanner(cfg *Config, conn *Connection) *PortScanner {
+func NewPortScanner(cfg *Config, conn *Connection, extraPorts []int) *PortScanner {
 	excluded := make(map[int]bool)
 	for _, p := range cfg.Ports.Exclude {
 		excluded[p] = true
 	}
-	return &PortScanner{
+	ps := &PortScanner{
 		cfg:      cfg,
 		conn:     conn,
 		active:   make(map[int]PortInfo),
@@ -53,6 +53,24 @@ func NewPortScanner(cfg *Config, conn *Connection) *PortScanner {
 		stopCh:   make(chan struct{}),
 		events:   make(chan PortEventMsg, 32),
 	}
+	for _, port := range extraPorts {
+		if excluded[port] {
+			continue
+		}
+		if err := conn.Forward(port, port); err == nil {
+			ps.active[port] = PortInfo{Port: port, Process: "preset"}
+			ps.sendEvent(PortEventMsg{
+				Time:    time.Now(),
+				Port:    port,
+				Process: "preset",
+				Action:  "forwarded",
+			})
+		}
+	}
+	if len(ps.active) > 0 {
+		ps.saveState()
+	}
+	return ps
 }
 
 func (ps *PortScanner) Run() {

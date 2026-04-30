@@ -84,6 +84,8 @@ type model struct {
 	fwdMode  bool
 	fwdInput string
 
+	userScrolled bool
+
 	width  int
 	height int
 
@@ -224,6 +226,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.logViewport, cmd = m.logViewport.Update(msg)
+		switch msg.String() {
+		case "up", "k", "pgup":
+			m.userScrolled = true
+		case "down", "j", "pgdown", "end", "G":
+			if m.logViewport.AtBottom() {
+				m.userScrolled = false
+			}
+		}
 		return m, cmd
 
 	case tea.WindowSizeMsg:
@@ -409,7 +419,9 @@ func (m *model) updateViewport() {
 	}
 	content := strings.Join(lines, "\n")
 	m.logViewport.SetContent(content)
-	m.logViewport.GotoBottom()
+	if !m.userScrolled {
+		m.logViewport.GotoBottom()
+	}
 }
 
 func (m *model) recalcLayout() {
@@ -418,7 +430,7 @@ func (m *model) recalcLayout() {
 	if bottomHeight < 4 {
 		bottomHeight = 4
 	}
-	activityWidth := (m.width * 2 / 3) - 1
+	activityWidth := (m.width * 3 / 5) - 1
 	if activityWidth < 30 {
 		activityWidth = 30
 	}
@@ -499,7 +511,7 @@ func (m model) renderNetwork() string {
 }
 
 func (m model) renderBottomPanes() string {
-	activityWidth := m.width * 2 / 3
+	activityWidth := m.width * 3 / 5
 	portsWidth := m.width - activityWidth
 	if activityWidth < 30 {
 		activityWidth = 30
