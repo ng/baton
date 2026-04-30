@@ -79,6 +79,9 @@ type model struct {
 	sendMode  bool
 	sendInput string
 
+	fwdMode  bool
+	fwdInput string
+
 	width  int
 	height int
 
@@ -171,6 +174,11 @@ type sendResultMsg struct {
 	err        error
 }
 
+type fwdResultMsg struct {
+	port int
+	err  error
+}
+
 func (m model) Init() tea.Cmd {
 	return tea.Batch(
 		waitForConnEvent(m.connEvents),
@@ -188,6 +196,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.sendMode {
 			return m.updateSendMode(msg)
 		}
+		if m.fwdMode {
+			return m.updateFwdMode(msg)
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -203,6 +214,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "s":
 			m.sendMode = true
 			m.sendInput = ""
+			return m, nil
+		case "f":
+			m.fwdMode = true
+			m.fwdInput = ""
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -221,8 +236,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ConnEventMsg:
 		dir := "←"
-		if strings.Contains(msg.Message, "reconnect") {
-			dir = "→"
+		if strings.Contains(msg.Message, "reconnect") || strings.Contains(msg.Message, "lost") {
+			dir = "🔄"
 		}
 		m.addLog(msg.Time, msg.Message, dir)
 		if strings.Contains(msg.Message, "reconnected") || strings.Contains(msg.Message, "connected to") {
@@ -279,6 +294,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.addLog(time.Now(), fmt.Sprintf("send failed: %s: %v", msg.filename, msg.err), "✕")
 		}
 		return m, nil
+
+	case fwdResultMsg:
+		if msg.err != nil {
+			m.addLog(time.Now(), fmt.Sprintf("forward :%d failed: %v", msg.port, msg.err), "✕")
+		} else {
+			m.addLog(time.Now(), fmt.Sprintf("forwarding local :%d", msg.port), "→")
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -316,6 +339,45 @@ func (m model) updateSendMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m model) updateFwdMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.fwdMode = false
+		m.fwdInput = ""
+		return m, nil
+	case "enter":
+		input := strings.TrimSpace(m.fwdInput)
+		m.fwdMode = false
+		m.fwdInput = ""
+		if input == "" {
+			return m, nil
+		}
+		port := 0
+		fmt.Sscanf(input, "%d", &port)
+		if port <= 0 || port > 65535 {
+			m.addLog(time.Now(), fmt.Sprintf("invalid port: %s", input), "✕")
+			return m, nil
+		}
+		c := m.conn
+		p := port
+		return m, func() tea.Msg {
+			err := c.Forward(p, p)
+			return fwdResultMsg{port: p, err: err}
+		}
+	case "backspace":
+		if len(m.fwdInput) > 0 {
+			m.fwdInput = m.fwdInput[:len(m.fwdInput)-1]
+		}
+		return m, nil
+	default:
+		ch := msg.String()
+		if len(ch) == 1 && ch[0] >= '0' && ch[0] <= '9' {
+			m.fwdInput += ch
+		}
+		return m, nil
+	}
+}
+
 func (m *model) addLog(t time.Time, msg string, direction string) {
 	if direction == "" {
 		direction = " "
@@ -336,6 +398,8 @@ func (m *model) updateViewport() {
 			dir = outStyle.Render("→")
 		} else if e.Direction == "←" {
 			dir = inStyle.Render("←")
+		} else if e.Direction == "🔄" {
+			dir = yellowStyle.Render("🔄")
 		} else if e.Direction == "✕" {
 			dir = redStyle.Render("✕")
 		}
@@ -470,7 +534,7 @@ func (m model) renderPortsColumn(width, height int) string {
 }
 
 func (m model) renderLocalPorts(width, height int) string {
-	header := sectionTitle.Render(fmt.Sprintf("%s → %s", shortName(m.host), m.localHost))
+	header := sectionTitle.Render(shortName(m.host)) + " " + outStyle.Render("→") + " " + sectionTitle.Render(m.localHost)
 	var lines []string
 	if len(m.localForwards) == 0 {
 		lines = append(lines, portStyle.Render(dimStyle.Render("scanning...")))
@@ -506,7 +570,7 @@ func (m model) renderLocalPorts(width, height int) string {
 }
 
 func (m model) renderRemotePorts(width, height int) string {
-	header := sectionTitle.Render(fmt.Sprintf("%s ← %s", m.localHost, shortName(m.host)))
+	header := sectionTitle.Render(m.localHost) + " " + inStyle.Render("←") + " " + sectionTitle.Render(shortName(m.host))
 	var lines []string
 	if len(m.reverseTunnels) == 0 {
 		lines = append(lines, portStyle.Render(dimStyle.Render("none")))
@@ -526,7 +590,11 @@ func (m model) renderFooter() string {
 		cursor := outStyle.Render("█")
 		return "  " + outStyle.Render("send:") + " " + m.sendInput + cursor + "  " + dimStyle.Render("enter send  esc cancel")
 	}
-	return dimStyle.Render("  ↑↓ scroll  r reconnect  s send  q quit")
+	if m.fwdMode {
+		cursor := outStyle.Render("█")
+		return "  " + outStyle.Render("forward local port:") + " " + m.fwdInput + cursor + "  " + dimStyle.Render("enter forward  esc cancel")
+	}
+	return dimStyle.Render("  ↑↓ scroll  r reconnect  s send  f forward  q quit")
 }
 
 func formatDuration(d time.Duration) string {

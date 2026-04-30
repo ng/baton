@@ -88,17 +88,11 @@ func (tm *ThroughputMonitor) sample() {
 	rx, tx := parseNetDev(parts[0])
 	now := time.Now()
 
-	if !tm.lastTime.IsZero() {
+	if !tm.lastTime.IsZero() && tx >= tm.lastTx && rx >= tm.lastRx {
 		elapsed := now.Sub(tm.lastTime).Seconds()
 		if elapsed > 0 {
 			upload := float64(tx-tm.lastTx) / elapsed
 			download := float64(rx-tm.lastRx) / elapsed
-			if upload < 0 {
-				upload = 0
-			}
-			if download < 0 {
-				download = 0
-			}
 			select {
 			case tm.events <- ThroughputMsg{Upload: upload, Download: download}:
 			default:
@@ -117,17 +111,11 @@ func (tm *ThroughputMonitor) sample() {
 				portInfo := make(map[int]PortTrafficInfo)
 				for port, cur := range current {
 					prev, ok := tm.lastPorts[port]
-					if !ok {
+					if !ok || cur.sent < prev.sent || cur.received < prev.received {
 						continue
 					}
 					up := float64(cur.sent-prev.sent) / elapsed
 					down := float64(cur.received-prev.received) / elapsed
-					if up < 0 {
-						up = 0
-					}
-					if down < 0 {
-						down = 0
-					}
 					if up > 0 || down > 0 {
 						portInfo[port] = PortTrafficInfo{Port: port, Upload: up, Download: down}
 					}
