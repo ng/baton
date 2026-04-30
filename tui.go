@@ -101,7 +101,7 @@ type model struct {
 	portTrafficEvents <-chan PortTrafficMsg
 }
 
-func newModel(cfg *Config, conn *Connection, scanner *PortScanner, transferer *Transferer, throughput *ThroughputMonitor) model {
+func newModel(cfg *Config, conn *Connection, scanner *PortScanner, transferer *Transferer, throughput *ThroughputMonitor, preset string) model {
 	vp := viewport.New(80, 10)
 	vp.SetContent("")
 
@@ -126,9 +126,7 @@ func newModel(cfg *Config, conn *Connection, scanner *PortScanner, transferer *T
 		transferer: transferer,
 
 		logViewport: vp,
-		logEntries: []logEntry{
-			{Time: time.Now(), Message: "connected to " + conn.host, Direction: "←"},
-		},
+		logEntries:  initialLogEntries(conn.host, preset, cfg),
 
 		portTraffic: make(map[int]PortTrafficInfo),
 		inboxPath:   cfg.Transfer.Inbox,
@@ -233,11 +231,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			m.autoReconnect = !m.autoReconnect
 			m.conn.SetAutoReconnect(m.autoReconnect)
-			state := "on"
-			if !m.autoReconnect {
-				state = "off"
+			if m.autoReconnect {
+				m.addLog(time.Now(), "auto-reconnect on", "🟢")
+			} else {
+				m.addLog(time.Now(), "auto-reconnect off", "🔴")
 			}
-			m.addLog(time.Now(), "auto-reconnect "+state, "")
 			return m, nil
 		case "s":
 			m.sendMode = true
@@ -321,8 +319,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForTransferEvent(m.transferEvents)
 
 	case ThroughputMsg:
-		m.uploadSamples = appendRing(m.uploadSamples, msg.Upload, 60)
-		m.downloadSamples = appendRing(m.downloadSamples, msg.Download, 60)
+		maxSamples := m.width - 18
+		if maxSamples < 60 {
+			maxSamples = 60
+		}
+		m.uploadSamples = appendRing(m.uploadSamples, msg.Upload, maxSamples)
+		m.downloadSamples = appendRing(m.downloadSamples, msg.Download, maxSamples)
 		return m, waitForThroughput(m.throughputEvents)
 
 	case PortTrafficMsg:
@@ -584,7 +586,7 @@ func (m model) renderPortsColumn(width, height int) string {
 }
 
 func (m model) renderLocalPorts(width, height int) string {
-	header := sectionTitle.Render(shortName(m.host)) + " " + outStyle.Render("→") + " " + sectionTitle.Render(m.localHost)
+	header := sectionTitle.Render("REMOTE") + " " + dimStyle.Render(shortName(m.host))
 	var lines []string
 	if len(m.localForwards) == 0 {
 		lines = append(lines, portStyle.Render(dimStyle.Render("scanning...")))
@@ -620,7 +622,7 @@ func (m model) renderLocalPorts(width, height int) string {
 }
 
 func (m model) renderRemotePorts(width, height int) string {
-	header := sectionTitle.Render(m.localHost) + " " + inStyle.Render("←") + " " + sectionTitle.Render(shortName(m.host))
+	header := sectionTitle.Render("LOCAL") + " " + dimStyle.Render(m.localHost)
 	var lines []string
 	if len(m.reverseTunnels) == 0 {
 		lines = append(lines, portStyle.Render(dimStyle.Render("none")))
@@ -669,16 +671,52 @@ func lastSample(samples []float64) float64 {
 	return samples[len(samples)-1]
 }
 
-var portNumberRe = regexp.MustCompile(`\b(port )?(\d{2,5})\b`)
+var portLogRe = regexp.MustCompile(`port (\d{2,5})\b|:(\d{2,5})\b`)
 
 func colorizeLogMessage(msg string) string {
-	return portNumberRe.ReplaceAllStringFunc(msg, func(match string) string {
+	return portLogRe.ReplaceAllStringFunc(msg, func(match string) string {
 		if strings.HasPrefix(match, "port ") {
 			num := strings.TrimPrefix(match, "port ")
-			return "port " + outStyle.Render(num)
+			return "port " + activeStyle.Render(num)
 		}
-		return activeStyle.Render(match)
+		if strings.HasPrefix(match, ":") {
+			num := strings.TrimPrefix(match, ":")
+			return ":" + activeStyle.Render(num)
+		}
+		return match
 	})
+}
+
+func initialLogEntries(host, preset string, cfg *Config) []logEntry {
+	now := time.Now()
+	entries := []logEntry{
+		{Time: now, Message: "connected to " + host, Direction: "🟢"},
+	}
+	if preset != "" {
+		if p, ok := cfg.Presets[preset]; ok {
+			ports := make([]string, len(p.Ports))
+			for i, port := range p.Ports {
+				ports[i] = fmt.Sprintf(":%d", port)
+			}
+			entries = append(entries, logEntry{
+				Time:      now,
+				Message:   fmt.Sprintf("preset %s: %s", preset, strings.Join(ports, " ")),
+				Direction: "→",
+			})
+		}
+	}
+	if len(cfg.Ports.Extra) > 0 {
+		ports := make([]string, len(cfg.Ports.Extra))
+		for i, port := range cfg.Ports.Extra {
+			ports[i] = fmt.Sprintf(":%d", port)
+		}
+		entries = append(entries, logEntry{
+			Time:      now,
+			Message:   fmt.Sprintf("extra ports: %s", strings.Join(ports, " ")),
+			Direction: "→",
+		})
+	}
+	return entries
 }
 
 func looksLikeFilePath(s string) bool {

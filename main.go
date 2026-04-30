@@ -123,7 +123,7 @@ func runConnect(cfg *Config, host, preset string) {
 	throughput := NewThroughputMonitor(conn, 2*time.Second)
 	go throughput.Run()
 
-	m := newModel(cfg, conn, scanner, transferer, throughput)
+	m := newModel(cfg, conn, scanner, transferer, throughput, preset)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {

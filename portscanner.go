@@ -16,6 +16,7 @@ type PortScanner struct {
 	mu       sync.RWMutex
 	active   map[int]PortInfo
 	excluded map[int]bool
+	pinned   map[int]bool
 	stopCh   chan struct{}
 	events   chan PortEventMsg
 }
@@ -45,11 +46,13 @@ func NewPortScanner(cfg *Config, conn *Connection, extraPorts []int) *PortScanne
 	for _, p := range cfg.Ports.Exclude {
 		excluded[p] = true
 	}
+	pinned := make(map[int]bool)
 	ps := &PortScanner{
 		cfg:      cfg,
 		conn:     conn,
 		active:   make(map[int]PortInfo),
 		excluded: excluded,
+		pinned:   pinned,
 		stopCh:   make(chan struct{}),
 		events:   make(chan PortEventMsg, 32),
 	}
@@ -57,6 +60,7 @@ func NewPortScanner(cfg *Config, conn *Connection, extraPorts []int) *PortScanne
 		if excluded[port] {
 			continue
 		}
+		pinned[port] = true
 		if err := conn.Forward(port, port); err == nil {
 			ps.active[port] = PortInfo{Port: port, Process: "preset"}
 			ps.sendEvent(PortEventMsg{
@@ -210,7 +214,7 @@ func (ps *PortScanner) scan() {
 	}
 
 	for port := range ps.active {
-		if _, exists := discovered[port]; !exists {
+		if _, exists := discovered[port]; !exists && !ps.pinned[port] {
 			if err := ps.conn.CancelForward(port, port); err == nil {
 				info := ps.active[port]
 				delete(ps.active, port)
