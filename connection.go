@@ -71,7 +71,7 @@ func (c *Connection) Start() error {
 		args = append(args, "-R", fmt.Sprintf("%d:localhost:%d", remotePort, port))
 	}
 	for _, port := range c.localPorts {
-		args = append(args, "-L", fmt.Sprintf("%d:localhost:%d", port, port))
+		args = append(args, "-L", fmt.Sprintf("0.0.0.0:%d:localhost:%d", port, port))
 	}
 	args = append(args, c.host)
 
@@ -144,7 +144,7 @@ func (c *Connection) Forward(localPort, remotePort int) error {
 	cmd := exec.Command("ssh",
 		"-S", c.cfg.Connection.ControlSocket,
 		"-O", "forward",
-		"-L", fmt.Sprintf("%d:localhost:%d", localPort, remotePort),
+		"-L", fmt.Sprintf("0.0.0.0:%d:localhost:%d", localPort, remotePort),
 		c.host,
 	)
 	return cmd.Run()
@@ -154,7 +154,7 @@ func (c *Connection) CancelForward(localPort, remotePort int) error {
 	cmd := exec.Command("ssh",
 		"-S", c.cfg.Connection.ControlSocket,
 		"-O", "cancel",
-		"-L", fmt.Sprintf("%d:localhost:%d", localPort, remotePort),
+		"-L", fmt.Sprintf("0.0.0.0:%d:localhost:%d", localPort, remotePort),
 		c.host,
 	)
 	return cmd.Run()
@@ -268,7 +268,7 @@ func (c *Connection) reconnect() error {
 		args = append(args, "-R", fmt.Sprintf("%d:localhost:%d", remotePort, port))
 	}
 	for _, port := range c.localPorts {
-		args = append(args, "-L", fmt.Sprintf("%d:localhost:%d", port, port))
+		args = append(args, "-L", fmt.Sprintf("0.0.0.0:%d:localhost:%d", port, port))
 	}
 	args = append(args, c.host)
 
