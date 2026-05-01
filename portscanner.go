@@ -232,23 +232,16 @@ func (ps *PortScanner) scan() {
 		}
 		toForward = append(toForward, info)
 	}
-	ps.mu.Unlock()
-
 	for _, info := range toForward {
-		if err := ps.conn.Forward(info.Port, info.Port); err == nil {
-			ps.mu.Lock()
-			ps.active[info.Port] = info
-			ps.saveState()
-			ps.sendEvent(PortEventMsg{
-				Time:    time.Now(),
-				Port:    info.Port,
-				Process: info.Process,
-				Action:  "forwarded",
-			})
-			ps.mu.Unlock()
-		}
+		ps.active[info.Port] = info
+		ps.saveState()
+		ps.sendEvent(PortEventMsg{
+			Time:    time.Now(),
+			Port:    info.Port,
+			Process: info.Process,
+			Action:  "discovered",
+		})
 	}
-	ps.mu.Lock()
 
 	for port, info := range ps.active {
 		if ps.pinned[port] {
@@ -267,16 +260,14 @@ func (ps *PortScanner) SweepStale() []int {
 	var swept []int
 	for port, info := range ps.active {
 		if info.Stale && !ps.pinned[port] {
-			if err := ps.conn.CancelForward(port, port); err == nil {
-				delete(ps.active, port)
-				swept = append(swept, port)
-				ps.sendEvent(PortEventMsg{
-					Time:    time.Now(),
-					Port:    port,
-					Process: info.Process,
-					Action:  "removed",
-				})
-			}
+			delete(ps.active, port)
+			swept = append(swept, port)
+			ps.sendEvent(PortEventMsg{
+				Time:    time.Now(),
+				Port:    port,
+				Process: info.Process,
+				Action:  "removed",
+			})
 		}
 	}
 	if len(swept) > 0 {
