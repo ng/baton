@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -43,6 +45,19 @@ var (
 	portStyle = lipgloss.NewStyle().
 			PaddingLeft(3)
 )
+
+func trayBinary() string {
+	self, err := os.Executable()
+	if err == nil {
+		dir := filepath.Dir(self)
+		name := "baton-tray-" + runtime.GOOS + "-" + runtime.GOARCH
+		candidate := filepath.Join(dir, name)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return "baton-tray"
+}
 
 type logEntry struct {
 	Time      time.Time
@@ -201,6 +216,10 @@ type fwdResultMsg struct {
 	err  error
 }
 
+type trayResultMsg struct {
+	err error
+}
+
 type disconnectResultMsg struct {
 	port    int
 	reverse bool
@@ -277,9 +296,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.portSelected = 0
 			return m, nil
 		case "t":
+			m.addLog(time.Now(), "opening tray...", "⚡")
 			return m, func() tea.Msg {
-				exec.Command("baton-tray").Start()
-				return nil
+				err := exec.Command(trayBinary()).Start()
+				return trayResultMsg{err: err}
 			}
 		}
 		var cmd tea.Cmd
@@ -439,6 +459,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case trayResultMsg:
+		if msg.err != nil {
+			m.addLog(time.Now(), fmt.Sprintf("tray failed: %v", msg.err), "✕")
+		}
+		return m, nil
+
 	case sweepResultMsg:
 		if len(msg.swept) > 0 {
 			m.addLog(time.Now(), fmt.Sprintf("swept %d stale port(s)", len(msg.swept)), "←")
@@ -556,9 +582,10 @@ func (m model) updatePortFocus(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "c":
 		return m.sweepStalePorts()
 	case "t":
+		m.addLog(time.Now(), "opening tray...", "⚡")
 		return m, func() tea.Msg {
-			exec.Command("baton-tray").Start()
-			return nil
+			err := exec.Command(trayBinary()).Start()
+			return trayResultMsg{err: err}
 		}
 	case "q", "ctrl+c":
 		return m, tea.Quit
@@ -786,11 +813,15 @@ func (m model) renderLocalPorts(width, height int) string {
 		headerArrow = headerStyle.Render("→")
 	}
 	header := sectionTitle.Render(shortName(m.host)) + " " + headerArrow + " " + sectionTitle.Render(m.localHost)
+	sorted := make([]PortInfo, len(m.localForwards))
+	copy(sorted, m.localForwards)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Port < sorted[j].Port })
+
 	var lines []string
-	if len(m.localForwards) == 0 {
+	if len(sorted) == 0 {
 		lines = append(lines, portStyle.Render(dimStyle.Render("scanning...")))
 	}
-	for i, p := range m.localForwards {
+	for i, p := range sorted {
 		hasTraffic := false
 		traffic := ""
 		if t, ok := m.portTraffic[p.Port]; ok {
@@ -849,11 +880,15 @@ func (m model) renderRemotePorts(width, height int) string {
 		headerArrow = headerStyle.Render("→")
 	}
 	header := sectionTitle.Render(m.localHost) + " " + headerArrow + " " + sectionTitle.Render(shortName(m.host))
+	sorted := make([]PortInfo, len(m.reverseTunnels))
+	copy(sorted, m.reverseTunnels)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Port < sorted[j].Port })
+
 	var lines []string
-	if len(m.reverseTunnels) == 0 {
+	if len(sorted) == 0 {
 		lines = append(lines, portStyle.Render(dimStyle.Render("none")))
 	}
-	for i, p := range m.reverseTunnels {
+	for i, p := range sorted {
 		port := inStyle.Render(fmt.Sprintf(":%d", p.Port))
 		desc := p.Label
 		if desc == "" {
