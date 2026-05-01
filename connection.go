@@ -64,21 +64,9 @@ func (c *Connection) Start() error {
 	c.cmd = exec.Command("ssh", args...)
 	c.cmd.Stderr = nil
 
-	stdin, err := c.cmd.StdinPipe()
-	if err != nil {
-		return fmt.Errorf("ssh stdin pipe: %w", err)
-	}
-	stdout, err := c.cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("ssh stdout pipe: %w", err)
-	}
-
 	if err := c.cmd.Start(); err != nil {
 		return fmt.Errorf("ssh start: %w", err)
 	}
-
-	c.monStdin = stdin
-	c.monReader = bufio.NewReaderSize(stdout, 1024*1024)
 
 	for i := 0; i < 30; i++ {
 		time.Sleep(200 * time.Millisecond)
@@ -111,7 +99,7 @@ func (c *Connection) buildSSHArgs() []string {
 	for _, port := range c.localPorts {
 		args = append(args, "-L", fmt.Sprintf("0.0.0.0:%d:localhost:%d", port, port))
 	}
-	args = append(args, c.host, "exec bash -s")
+	args = append(args, "-N", c.host)
 	return args
 }
 
@@ -398,21 +386,9 @@ func (c *Connection) reconnect() error {
 	c.cmd = exec.Command("ssh", args...)
 	c.cmd.Stderr = nil
 
-	stdin, err := c.cmd.StdinPipe()
-	if err != nil {
-		return err
-	}
-	stdout, err := c.cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-
 	if err := c.cmd.Start(); err != nil {
 		return err
 	}
-
-	c.monStdin = stdin
-	c.monReader = bufio.NewReaderSize(stdout, 1024*1024)
 
 	for i := 0; i < 30; i++ {
 		time.Sleep(200 * time.Millisecond)
