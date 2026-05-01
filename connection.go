@@ -1,9 +1,13 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -14,6 +18,10 @@ type Connection struct {
 	host          string
 	cmd           *exec.Cmd
 	dynamicFwds   map[string]*exec.Cmd
+	monCmd        *exec.Cmd
+	monStdin      io.WriteCloser
+	monReader     *bufio.Reader
+	monMu         sync.Mutex
 	mu            sync.Mutex
 	stopCh        chan struct{}
 	stopped       bool
@@ -71,6 +79,9 @@ func (c *Connection) Start() error {
 			c.StartTime = time.Now()
 			os.WriteFile(c.cfg.Connection.ControlSocket+".host", []byte(c.host), 0644)
 			c.sendEvent("connected to " + c.host)
+			if err := c.startMonitor(); err != nil {
+				c.sendEvent(fmt.Sprintf("warning: monitor connection failed: %v", err))
+			}
 			go c.watchAndReconnect()
 			return nil
 		}
@@ -103,6 +114,49 @@ func (c *Connection) buildSSHArgs() []string {
 	return args
 }
 
+func (c *Connection) startMonitor() error {
+	cmd := exec.Command("ssh",
+		"-o", "ControlPath=none",
+		"-o", "ServerAliveInterval=15",
+		"-o", "ServerAliveCountMax=3",
+		"-o", "StrictHostKeyChecking=accept-new",
+		c.host,
+		"exec bash -s",
+	)
+	cmd.Stderr = nil
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	c.monCmd = cmd
+	c.monStdin = stdin
+	c.monReader = bufio.NewReaderSize(stdout, 1024*1024)
+	return nil
+}
+
+func (c *Connection) stopMonitor() {
+	if c.monStdin != nil {
+		c.monStdin.Close()
+	}
+	if c.monCmd != nil && c.monCmd.Process != nil {
+		c.monCmd.Process.Kill()
+		c.monCmd.Wait()
+		c.monCmd = nil
+	}
+}
+
+func (c *Connection) monitorAlive() bool {
+	return c.monCmd != nil && c.monCmd.Process != nil &&
+		c.monCmd.Process.Signal(syscall.Signal(0)) == nil
+}
+
 func (c *Connection) IsAlive() bool {
 	if c.cmd == nil || c.cmd.Process == nil {
 		return false
@@ -119,6 +173,7 @@ func (c *Connection) Stop() error {
 	}
 	c.stopped = true
 	close(c.stopCh)
+	c.stopMonitor()
 	c.stopDynamicForwards()
 	os.Remove(c.cfg.Connection.ControlSocket + ".host")
 
@@ -130,6 +185,28 @@ func (c *Connection) Stop() error {
 }
 
 func (c *Connection) RunRemote(command string) ([]byte, error) {
+	c.monMu.Lock()
+	defer c.monMu.Unlock()
+
+	if c.monitorAlive() {
+		delim := fmt.Sprintf("__BATON_%d__", time.Now().UnixNano())
+		_, err := fmt.Fprintf(c.monStdin, "%s; echo %s\n", command, delim)
+		if err == nil {
+			var buf bytes.Buffer
+			for {
+				line, err := c.monReader.ReadString('\n')
+				if err != nil {
+					break
+				}
+				if strings.TrimSpace(line) == delim {
+					return buf.Bytes(), nil
+				}
+				buf.WriteString(line)
+			}
+		}
+		c.stopMonitor()
+	}
+
 	return c.RunRemoteDirect(command)
 }
 
@@ -157,6 +234,8 @@ func (c *Connection) Forward(localPort, remotePort int) error {
 	cmd := exec.Command("ssh",
 		"-N",
 		"-o", "ControlPath=none",
+		"-o", "ServerAliveInterval=15",
+		"-o", "ServerAliveCountMax=3",
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-o", "ExitOnForwardFailure=yes",
 		"-L", fmt.Sprintf("0.0.0.0:%d:localhost:%d", localPort, remotePort),
@@ -213,6 +292,8 @@ func (c *Connection) ReverseForward(remotePort, localPort int) error {
 	cmd := exec.Command("ssh",
 		"-N",
 		"-o", "ControlPath=none",
+		"-o", "ServerAliveInterval=15",
+		"-o", "ServerAliveCountMax=3",
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-o", "ExitOnForwardFailure=yes",
 		"-R", fmt.Sprintf("%d:localhost:%d", remotePort, localPort),
@@ -333,6 +414,7 @@ func (c *Connection) watchAndReconnect() {
 }
 
 func (c *Connection) reconnect() error {
+	c.stopMonitor()
 	c.mu.Lock()
 	c.stopDynamicForwards()
 	c.mu.Unlock()
@@ -353,6 +435,7 @@ func (c *Connection) reconnect() error {
 	for i := 0; i < 30; i++ {
 		time.Sleep(200 * time.Millisecond)
 		if c.IsAlive() {
+			c.startMonitor()
 			return nil
 		}
 	}
