@@ -115,7 +115,7 @@ func runConnect(cfg *Config, host, preset string) {
 	extraPorts := cfg.EffectiveExtra(preset)
 	reversePorts := cfg.EffectiveReverse(preset)
 
-	conn := NewConnection(cfg, host, reversePorts)
+	conn := NewConnection(cfg, host, reversePorts, extraPorts)
 
 	scanner := NewPortScanner(cfg, conn, extraPorts, nil, preset)
 	transferer := NewTransferer(cfg)
@@ -163,7 +163,7 @@ func runConnect(cfg *Config, host, preset string) {
 }
 
 func runSend(cfg *Config, file, dest string) {
-	conn := NewConnection(cfg, cfg.Connection.Host, nil)
+	conn := NewConnection(cfg, cfg.Connection.Host, nil, nil)
 	if !conn.IsAlive() {
 		fmt.Fprintln(os.Stderr, "no active connection. run 'baton connect' first.")
 		os.Exit(1)
@@ -180,7 +180,7 @@ func runSend(cfg *Config, file, dest string) {
 }
 
 func runPorts(cfg *Config) {
-	conn := NewConnection(cfg, cfg.Connection.Host, nil)
+	conn := NewConnection(cfg, cfg.Connection.Host, nil, nil)
 	if !conn.IsAlive() {
 		fmt.Fprintln(os.Stderr, "no active connection.")
 		os.Exit(1)
@@ -244,7 +244,7 @@ func runInit() {
 }
 
 func runStatus(cfg *Config) {
-	conn := NewConnection(cfg, cfg.Connection.Host, nil)
+	conn := NewConnection(cfg, cfg.Connection.Host, nil, nil)
 	alive := conn.IsAlive()
 	if alive {
 		fmt.Printf("connected: %s\n", cfg.Connection.Host)
@@ -255,7 +255,7 @@ func runStatus(cfg *Config) {
 }
 
 func runDisconnect(cfg *Config) {
-	conn := NewConnection(cfg, cfg.Connection.Host, nil)
+	conn := NewConnection(cfg, cfg.Connection.Host, nil, nil)
 	if err := conn.Stop(); err != nil {
 		fmt.Fprintf(os.Stderr, "disconnect failed: %v\n", err)
 		os.Exit(1)

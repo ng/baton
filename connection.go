@@ -19,9 +19,10 @@ type Connection struct {
 	events         chan ConnEventMsg
 	StartTime      time.Time
 	reversePorts   []int
+	localPorts     []int
 }
 
-func NewConnection(cfg *Config, host string, reversePorts []int) *Connection {
+func NewConnection(cfg *Config, host string, reversePorts []int, localPorts []int) *Connection {
 	return &Connection{
 		cfg:           cfg,
 		host:          host,
@@ -29,6 +30,7 @@ func NewConnection(cfg *Config, host string, reversePorts []int) *Connection {
 		stopCh:        make(chan struct{}),
 		events:        make(chan ConnEventMsg, 32),
 		reversePorts:  reversePorts,
+		localPorts:    localPorts,
 	}
 }
 
@@ -67,6 +69,9 @@ func (c *Connection) Start() error {
 			remotePort = 4443
 		}
 		args = append(args, "-R", fmt.Sprintf("%d:localhost:%d", remotePort, port))
+	}
+	for _, port := range c.localPorts {
+		args = append(args, "-L", fmt.Sprintf("%d:localhost:%d", port, port))
 	}
 	args = append(args, c.host)
 
@@ -261,6 +266,9 @@ func (c *Connection) reconnect() error {
 			remotePort = 4443
 		}
 		args = append(args, "-R", fmt.Sprintf("%d:localhost:%d", remotePort, port))
+	}
+	for _, port := range c.localPorts {
+		args = append(args, "-L", fmt.Sprintf("%d:localhost:%d", port, port))
 	}
 	args = append(args, c.host)
 

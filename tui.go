@@ -720,7 +720,7 @@ func (m model) renderHeader() string {
 }
 
 func (m model) renderNetwork() string {
-	sparkWidth := m.width - 18
+	sparkWidth := m.width - 20
 	if sparkWidth < 10 {
 		sparkWidth = 10
 	}
@@ -735,8 +735,8 @@ func (m model) renderNetwork() string {
 		renderSparkline(m.downloadSamples, sparkWidth))
 
 	header := sectionTitle.Render("NETWORK")
-	upLine := portStyle.Render(fmt.Sprintf("%s %8s %s", outStyle.Render("↑"), upRate, upSpark))
-	downLine := portStyle.Render(fmt.Sprintf("%s %8s %s", inStyle.Render("↓"), downRate, downSpark))
+	upLine := portStyle.Render(fmt.Sprintf("%s %10s %s", outStyle.Render("↑"), upRate, upSpark))
+	downLine := portStyle.Render(fmt.Sprintf("%s %10s %s", inStyle.Render("↓"), downRate, downSpark))
 
 	return header + "\n" + upLine + "\n" + downLine
 }

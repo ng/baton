@@ -83,16 +83,15 @@ func (ps *PortScanner) forwardPinned() {
 	defer ps.mu.Unlock()
 	for port := range ps.pinned {
 		label := ps.cfg.PortLabel(ps.preset, port)
-		if err := ps.conn.Forward(port, port); err == nil {
-			ps.active[port] = PortInfo{Port: port, Label: label, Pinned: true}
-			ps.saveState()
-			ps.sendEvent(PortEventMsg{
-				Time:    time.Now(),
-				Port:    port,
-				Process: label,
-				Action:  "forwarded",
-			})
-		}
+		ps.conn.Forward(port, port)
+		ps.active[port] = PortInfo{Port: port, Label: label, Pinned: true}
+		ps.saveState()
+		ps.sendEvent(PortEventMsg{
+			Time:    time.Now(),
+			Port:    port,
+			Process: label,
+			Action:  "forwarded",
+		})
 	}
 }
 
