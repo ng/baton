@@ -36,7 +36,10 @@ class StatusBarController: NSObject, NSMenuDelegate {
             self?.handleDaemonExit(status)
         }
 
-        startConnection()
+        // Defer connection until after run loop starts
+        DispatchQueue.main.async { [weak self] in
+            self?.startConnection()
+        }
 
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
@@ -55,17 +58,28 @@ class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     private func isExistingConnection() -> Bool {
-        FileManager.default.fileExists(atPath: "/tmp/baton.sock") &&
-            (try? Process.run(URL(fileURLWithPath: "/usr/bin/ssh"),
-                arguments: ["-S", "/tmp/baton.sock", "-O", "check", resolveHost() ?? ""],
-                terminationHandler: nil)) != nil
+        guard FileManager.default.fileExists(atPath: "/tmp/baton.sock") else { return false }
+        guard let host = resolveHost(), !host.isEmpty else { return false }
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        proc.arguments = ["-S", "/tmp/baton.sock", "-O", "check", host]
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+            return proc.terminationStatus == 0
+        } catch {
+            return false
+        }
     }
 
     private func startMonitorPolling() {
+        pollStateFiles()
         monitorTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             self?.pollStateFiles()
         }
-        pollStateFiles()
     }
 
     private func pollStateFiles() {
@@ -76,12 +90,32 @@ class StatusBarController: NSObject, NSMenuDelegate {
             state.host = hostData.trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
-        let alive = Process.launchedProcess(
-            launchPath: "/usr/bin/ssh",
-            arguments: ["-S", "/tmp/baton.sock", "-O", "check", state.host]
-        )
-        alive.waitUntilExit()
-        state.isConnected = alive.terminationStatus == 0
+        DispatchQueue.global().async { [weak self] in
+            guard let self = self else { return }
+            let host = self.state.host
+            guard !host.isEmpty else { return }
+
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+            proc.arguments = ["-S", "/tmp/baton.sock", "-O", "check", host]
+            proc.standardOutput = FileHandle.nullDevice
+            proc.standardError = FileHandle.nullDevice
+            do {
+                try proc.run()
+                proc.waitUntilExit()
+                let alive = proc.terminationStatus == 0
+
+                DispatchQueue.main.async {
+                    self.state.isConnected = alive
+                    self.updateIcon()
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.state.isConnected = false
+                    self.updateIcon()
+                }
+            }
+        }
 
         if let portsData = try? String(contentsOfFile: portsFile, encoding: .utf8) {
             let ports = portsData.components(separatedBy: "\n")
@@ -90,8 +124,6 @@ class StatusBarController: NSObject, NSMenuDelegate {
                 PortEntry(port: $0, process: "", label: "", pinned: false, stale: false)
             }
         }
-
-        updateIcon()
     }
 
     private func handleEvent(_ event: DaemonEvent) {
@@ -121,23 +153,30 @@ class StatusBarController: NSObject, NSMenuDelegate {
     private func handleFileDrop(_ urls: [URL]) {
         for url in urls {
             if monitorOnly {
-                DispatchQueue.global().async {
+                DispatchQueue.global().async { [weak self] in
                     let proc = Process()
                     proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
                     proc.arguments = ["baton", "send", url.path]
                     let pipe = Pipe()
                     proc.standardOutput = pipe
-                    try? proc.run()
-                    proc.waitUntilExit()
-                    let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    DispatchQueue.main.async {
-                        if proc.terminationStatus == 0 {
-                            self.sendNotification(title: "Uploaded \(url.lastPathComponent)", body: output)
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(output, forType: .string)
-                        } else {
-                            self.sendNotification(title: "Upload failed", body: url.lastPathComponent)
+                    proc.standardError = FileHandle.nullDevice
+                    do {
+                        try proc.run()
+                        proc.waitUntilExit()
+                        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        DispatchQueue.main.async {
+                            if proc.terminationStatus == 0 {
+                                self?.sendNotification(title: "Uploaded \(url.lastPathComponent)", body: output)
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(output, forType: .string)
+                            } else {
+                                self?.sendNotification(title: "Upload failed", body: url.lastPathComponent)
+                            }
+                        }
+                    } catch {
+                        DispatchQueue.main.async {
+                            self?.sendNotification(title: "Upload failed", body: url.lastPathComponent)
                         }
                     }
                 }
@@ -148,13 +187,11 @@ class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     private func updateIcon() {
-        DispatchQueue.main.async {
-            let symbolName = self.state.isConnected ? "link" : "bolt.fill"
-            self.statusItem.button?.image = NSImage(
-                systemSymbolName: symbolName,
-                accessibilityDescription: "baton"
-            )
-        }
+        let symbolName = state.isConnected ? "link" : "bolt.fill"
+        statusItem.button?.image = NSImage(
+            systemSymbolName: symbolName,
+            accessibilityDescription: "baton"
+        )
     }
 
     // MARK: - NSMenuDelegate
@@ -165,7 +202,6 @@ class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     private func buildMenu(_ menu: NSMenu) {
-        // Status
         if state.isConnected {
             var statusText = "● Connected: \(state.host)"
             if let since = state.connectedSince {
@@ -182,7 +218,6 @@ class StatusBarController: NSObject, NSMenuDelegate {
         }
         menu.addItem(.separator())
 
-        // Local forwards
         if !state.localForwards.isEmpty {
             addDisabledItem(menu, "Forwarded Ports")
             for p in state.localForwards {
@@ -203,7 +238,6 @@ class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(forwardItem)
         menu.addItem(.separator())
 
-        // Reverse tunnels
         if !state.reverseTunnels.isEmpty {
             addDisabledItem(menu, "Reverse Tunnels")
             for p in state.reverseTunnels {
@@ -215,7 +249,6 @@ class StatusBarController: NSObject, NSMenuDelegate {
             menu.addItem(.separator())
         }
 
-        // Send file
         let sendItem = NSMenuItem(title: "Send File...", action: #selector(sendFile), keyEquivalent: "")
         sendItem.target = self
         sendItem.isEnabled = state.isConnected
@@ -224,7 +257,6 @@ class StatusBarController: NSObject, NSMenuDelegate {
         addDisabledItem(menu, "Drop files on icon to upload")
         menu.addItem(.separator())
 
-        // Recent transfers
         if !state.recentTransfers.isEmpty {
             addDisabledItem(menu, "Recent Transfers")
             for t in state.recentTransfers.prefix(3) {
@@ -236,7 +268,6 @@ class StatusBarController: NSObject, NSMenuDelegate {
             menu.addItem(.separator())
         }
 
-        // Auto-reconnect toggle
         let reconnItem = NSMenuItem(
             title: "Auto-reconnect",
             action: #selector(toggleReconnect),
@@ -246,7 +277,6 @@ class StatusBarController: NSObject, NSMenuDelegate {
         reconnItem.state = state.autoReconnect ? .on : .off
         menu.addItem(reconnItem)
 
-        // Disconnect / Connect
         if state.isConnected {
             let disconnItem = NSMenuItem(title: "Disconnect", action: #selector(disconnect), keyEquivalent: "")
             disconnItem.target = self
