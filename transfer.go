@@ -66,7 +66,8 @@ func transferFile(cfg *Config, localPath, remoteDest string) (string, error) {
 	remotePath := remoteDest + filename
 
 	cmd := exec.Command("scp",
-		"-o", fmt.Sprintf("ControlPath=%s", cfg.Connection.ControlSocket),
+		"-o", "ControlPath=none",
+		"-o", "StrictHostKeyChecking=accept-new",
 		localPath,
 		fmt.Sprintf("%s:%s", cfg.Connection.Host, remotePath),
 	)

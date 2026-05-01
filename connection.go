@@ -5,22 +5,23 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"syscall"
 	"time"
 )
 
 type Connection struct {
-	cfg            *Config
-	host           string
-	cmd            *exec.Cmd
-	localCmd       *exec.Cmd
-	mu             sync.Mutex
-	stopCh         chan struct{}
-	stopped        bool
-	autoReconnect  bool
-	events         chan ConnEventMsg
-	StartTime      time.Time
-	reversePorts   []int
-	localPorts     []int
+	cfg           *Config
+	host          string
+	cmd           *exec.Cmd
+	dynamicFwds   map[string]*exec.Cmd
+	mu            sync.Mutex
+	stopCh        chan struct{}
+	stopped       bool
+	autoReconnect bool
+	events        chan ConnEventMsg
+	StartTime     time.Time
+	reversePorts  []int
+	localPorts    []int
 }
 
 func NewConnection(cfg *Config, host string, reversePorts []int, localPorts []int) *Connection {
@@ -30,6 +31,7 @@ func NewConnection(cfg *Config, host string, reversePorts []int, localPorts []in
 		autoReconnect: true,
 		stopCh:        make(chan struct{}),
 		events:        make(chan ConnEventMsg, 32),
+		dynamicFwds:   make(map[string]*exec.Cmd),
 		reversePorts:  reversePorts,
 		localPorts:    localPorts,
 	}
@@ -48,30 +50,14 @@ func (c *Connection) Events() <-chan ConnEventMsg {
 
 func (c *Connection) Start() error {
 	if c.IsAlive() {
-		return fmt.Errorf("already connected (socket %s exists)", c.cfg.Connection.ControlSocket)
+		return fmt.Errorf("already connected")
 	}
 
 	if err := c.ensureInbox(); err != nil {
 		c.sendEvent(fmt.Sprintf("warning: could not create inbox: %v", err))
 	}
 
-	args := []string{
-		"-M",
-		"-S", c.cfg.Connection.ControlSocket,
-		"-N",
-		"-o", "ServerAliveInterval=15",
-		"-o", "ServerAliveCountMax=3",
-		"-o", "StrictHostKeyChecking=accept-new",
-		"-R", fmt.Sprintf("%d:localhost:22", c.cfg.Connection.ReversePort),
-	}
-	for _, port := range c.reversePorts {
-		remotePort := port
-		if port == 443 {
-			remotePort = 4443
-		}
-		args = append(args, "-R", fmt.Sprintf("%d:localhost:%d", remotePort, port))
-	}
-	args = append(args, c.host)
+	args := c.buildSSHArgs()
 
 	c.cmd = exec.Command("ssh", args...)
 	c.cmd.Stderr = nil
@@ -86,9 +72,6 @@ func (c *Connection) Start() error {
 			c.StartTime = time.Now()
 			os.WriteFile(c.cfg.Connection.ControlSocket+".host", []byte(c.host), 0644)
 			c.sendEvent("connected to " + c.host)
-			if err := c.startLocalForwards(); err != nil {
-				c.sendEvent(fmt.Sprintf("warning: local forwards failed: %v", err))
-			}
 			go c.watchAndReconnect()
 			return nil
 		}
@@ -98,45 +81,33 @@ func (c *Connection) Start() error {
 	return fmt.Errorf("ssh connection timed out after 6s")
 }
 
-func (c *Connection) startLocalForwards() error {
-	if len(c.localPorts) == 0 {
-		return nil
-	}
+func (c *Connection) buildSSHArgs() []string {
 	args := []string{
 		"-N",
-		"-o", "ControlPath=none",
 		"-o", "ServerAliveInterval=15",
 		"-o", "ServerAliveCountMax=3",
 		"-o", "StrictHostKeyChecking=accept-new",
+		"-R", fmt.Sprintf("%d:localhost:22", c.cfg.Connection.ReversePort),
+	}
+	for _, port := range c.reversePorts {
+		remotePort := port
+		if port == 443 {
+			remotePort = 4443
+		}
+		args = append(args, "-R", fmt.Sprintf("%d:localhost:%d", remotePort, port))
 	}
 	for _, port := range c.localPorts {
 		args = append(args, "-L", fmt.Sprintf("0.0.0.0:%d:localhost:%d", port, port))
 	}
 	args = append(args, c.host)
-
-	c.localCmd = exec.Command("ssh", args...)
-	c.localCmd.Stderr = nil
-	if err := c.localCmd.Start(); err != nil {
-		return fmt.Errorf("local forward ssh start: %w", err)
-	}
-	return nil
-}
-
-func (c *Connection) stopLocalForwards() {
-	if c.localCmd != nil && c.localCmd.Process != nil {
-		c.localCmd.Process.Kill()
-		c.localCmd.Wait()
-		c.localCmd = nil
-	}
+	return args
 }
 
 func (c *Connection) IsAlive() bool {
-	cmd := exec.Command("ssh",
-		"-S", c.cfg.Connection.ControlSocket,
-		"-O", "check",
-		c.host,
-	)
-	return cmd.Run() == nil
+	if c.cmd == nil || c.cmd.Process == nil {
+		return false
+	}
+	return c.cmd.Process.Signal(syscall.Signal(0)) == nil
 }
 
 func (c *Connection) Stop() error {
@@ -148,39 +119,20 @@ func (c *Connection) Stop() error {
 	}
 	c.stopped = true
 	close(c.stopCh)
-	c.stopLocalForwards()
+	c.stopDynamicForwards()
 	os.Remove(c.cfg.Connection.ControlSocket + ".host")
 
-	cmd := exec.Command("ssh",
-		"-S", c.cfg.Connection.ControlSocket,
-		"-O", "exit",
-		c.host,
-	)
-	if err := cmd.Run(); err != nil {
-		if c.cmd != nil && c.cmd.Process != nil {
-			c.cmd.Process.Kill()
-		}
-		return fmt.Errorf("ssh exit: %w", err)
+	if c.cmd != nil && c.cmd.Process != nil {
+		c.cmd.Process.Kill()
+		c.cmd.Wait()
 	}
 	return nil
 }
 
-// RunRemote executes a command on the remote host via the control socket.
-// This contends with forwarded data channels; prefer RunRemoteDirect for
-// periodic monitoring commands.
 func (c *Connection) RunRemote(command string) ([]byte, error) {
-	cmd := exec.Command("ssh",
-		"-S", c.cfg.Connection.ControlSocket,
-		c.host,
-		command,
-	)
-	return cmd.Output()
+	return c.RunRemoteDirect(command)
 }
 
-// RunRemoteDirect executes a command on the remote host over a fresh SSH
-// connection that bypasses the ControlMaster socket entirely. Use this for
-// periodic monitoring (throughput sampling, port scanning) so that control
-// socket traffic does not stall forwarded data channels under high concurrency.
 func (c *Connection) RunRemoteDirect(command string) ([]byte, error) {
 	cmd := exec.Command("ssh",
 		"-o", "ControlPath=none",
@@ -193,43 +145,123 @@ func (c *Connection) RunRemoteDirect(command string) ([]byte, error) {
 }
 
 func (c *Connection) Forward(localPort, remotePort int) error {
+	key := fmt.Sprintf("L:%d", localPort)
+	c.mu.Lock()
+	if existing, ok := c.dynamicFwds[key]; ok {
+		existing.Process.Kill()
+		existing.Wait()
+		delete(c.dynamicFwds, key)
+	}
+	c.mu.Unlock()
+
 	cmd := exec.Command("ssh",
-		"-S", c.cfg.Connection.ControlSocket,
-		"-O", "forward",
+		"-N",
+		"-o", "ControlPath=none",
+		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "ExitOnForwardFailure=yes",
 		"-L", fmt.Sprintf("0.0.0.0:%d:localhost:%d", localPort, remotePort),
 		c.host,
 	)
-	return cmd.Run()
+	cmd.Stderr = nil
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("forward ssh start: %w", err)
+	}
+
+	c.mu.Lock()
+	c.dynamicFwds[key] = cmd
+	c.mu.Unlock()
+
+	go func() {
+		cmd.Wait()
+		c.mu.Lock()
+		if c.dynamicFwds[key] == cmd {
+			delete(c.dynamicFwds, key)
+		}
+		c.mu.Unlock()
+	}()
+
+	return nil
 }
 
 func (c *Connection) CancelForward(localPort, remotePort int) error {
-	cmd := exec.Command("ssh",
-		"-S", c.cfg.Connection.ControlSocket,
-		"-O", "cancel",
-		"-L", fmt.Sprintf("0.0.0.0:%d:localhost:%d", localPort, remotePort),
-		c.host,
-	)
-	return cmd.Run()
+	key := fmt.Sprintf("L:%d", localPort)
+	c.mu.Lock()
+	cmd, ok := c.dynamicFwds[key]
+	if ok {
+		delete(c.dynamicFwds, key)
+	}
+	c.mu.Unlock()
+
+	if !ok {
+		return fmt.Errorf("no forward for port %d", localPort)
+	}
+	cmd.Process.Kill()
+	cmd.Wait()
+	return nil
 }
 
 func (c *Connection) ReverseForward(remotePort, localPort int) error {
+	key := fmt.Sprintf("R:%d", remotePort)
+	c.mu.Lock()
+	if existing, ok := c.dynamicFwds[key]; ok {
+		existing.Process.Kill()
+		existing.Wait()
+		delete(c.dynamicFwds, key)
+	}
+	c.mu.Unlock()
+
 	cmd := exec.Command("ssh",
-		"-S", c.cfg.Connection.ControlSocket,
-		"-O", "forward",
+		"-N",
+		"-o", "ControlPath=none",
+		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "ExitOnForwardFailure=yes",
 		"-R", fmt.Sprintf("%d:localhost:%d", remotePort, localPort),
 		c.host,
 	)
-	return cmd.Run()
+	cmd.Stderr = nil
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("reverse forward ssh start: %w", err)
+	}
+
+	c.mu.Lock()
+	c.dynamicFwds[key] = cmd
+	c.mu.Unlock()
+
+	go func() {
+		cmd.Wait()
+		c.mu.Lock()
+		if c.dynamicFwds[key] == cmd {
+			delete(c.dynamicFwds, key)
+		}
+		c.mu.Unlock()
+	}()
+
+	return nil
 }
 
 func (c *Connection) CancelReverseForward(remotePort, localPort int) error {
-	cmd := exec.Command("ssh",
-		"-S", c.cfg.Connection.ControlSocket,
-		"-O", "cancel",
-		"-R", fmt.Sprintf("%d:localhost:%d", remotePort, localPort),
-		c.host,
-	)
-	return cmd.Run()
+	key := fmt.Sprintf("R:%d", remotePort)
+	c.mu.Lock()
+	cmd, ok := c.dynamicFwds[key]
+	if ok {
+		delete(c.dynamicFwds, key)
+	}
+	c.mu.Unlock()
+
+	if !ok {
+		return fmt.Errorf("no reverse forward for port %d", remotePort)
+	}
+	cmd.Process.Kill()
+	cmd.Wait()
+	return nil
+}
+
+func (c *Connection) stopDynamicForwards() {
+	for key, cmd := range c.dynamicFwds {
+		cmd.Process.Kill()
+		cmd.Wait()
+		delete(c.dynamicFwds, key)
+	}
 }
 
 func (c *Connection) SetAutoReconnect(on bool) {
@@ -301,26 +333,16 @@ func (c *Connection) watchAndReconnect() {
 }
 
 func (c *Connection) reconnect() error {
-	c.stopLocalForwards()
-	os.Remove(c.cfg.Connection.ControlSocket)
+	c.mu.Lock()
+	c.stopDynamicForwards()
+	c.mu.Unlock()
 
-	args := []string{
-		"-M",
-		"-S", c.cfg.Connection.ControlSocket,
-		"-N",
-		"-o", "ServerAliveInterval=15",
-		"-o", "ServerAliveCountMax=3",
-		"-o", "StrictHostKeyChecking=accept-new",
-		"-R", fmt.Sprintf("%d:localhost:22", c.cfg.Connection.ReversePort),
+	if c.cmd != nil && c.cmd.Process != nil {
+		c.cmd.Process.Kill()
+		c.cmd.Wait()
 	}
-	for _, port := range c.reversePorts {
-		remotePort := port
-		if port == 443 {
-			remotePort = 4443
-		}
-		args = append(args, "-R", fmt.Sprintf("%d:localhost:%d", remotePort, port))
-	}
-	args = append(args, c.host)
+
+	args := c.buildSSHArgs()
 
 	c.cmd = exec.Command("ssh", args...)
 	c.cmd.Stderr = nil
@@ -332,7 +354,6 @@ func (c *Connection) reconnect() error {
 	for i := 0; i < 30; i++ {
 		time.Sleep(200 * time.Millisecond)
 		if c.IsAlive() {
-			c.startLocalForwards()
 			return nil
 		}
 	}
@@ -342,6 +363,6 @@ func (c *Connection) reconnect() error {
 }
 
 func (c *Connection) ensureInbox() error {
-	_, err := c.RunRemote(fmt.Sprintf("mkdir -p %s", c.cfg.Transfer.Inbox))
+	_, err := c.RunRemoteDirect(fmt.Sprintf("mkdir -p %s", c.cfg.Transfer.Inbox))
 	return err
 }
