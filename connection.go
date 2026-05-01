@@ -12,6 +12,7 @@ type Connection struct {
 	cfg            *Config
 	host           string
 	cmd            *exec.Cmd
+	localCmd       *exec.Cmd
 	mu             sync.Mutex
 	stopCh         chan struct{}
 	stopped        bool
@@ -70,9 +71,6 @@ func (c *Connection) Start() error {
 		}
 		args = append(args, "-R", fmt.Sprintf("%d:localhost:%d", remotePort, port))
 	}
-	for _, port := range c.localPorts {
-		args = append(args, "-L", fmt.Sprintf("0.0.0.0:%d:localhost:%d", port, port))
-	}
 	args = append(args, c.host)
 
 	c.cmd = exec.Command("ssh", args...)
@@ -88,6 +86,9 @@ func (c *Connection) Start() error {
 			c.StartTime = time.Now()
 			os.WriteFile(c.cfg.Connection.ControlSocket+".host", []byte(c.host), 0644)
 			c.sendEvent("connected to " + c.host)
+			if err := c.startLocalForwards(); err != nil {
+				c.sendEvent(fmt.Sprintf("warning: local forwards failed: %v", err))
+			}
 			go c.watchAndReconnect()
 			return nil
 		}
@@ -95,6 +96,38 @@ func (c *Connection) Start() error {
 
 	c.cmd.Process.Kill()
 	return fmt.Errorf("ssh connection timed out after 6s")
+}
+
+func (c *Connection) startLocalForwards() error {
+	if len(c.localPorts) == 0 {
+		return nil
+	}
+	args := []string{
+		"-N",
+		"-o", "ControlPath=none",
+		"-o", "ServerAliveInterval=15",
+		"-o", "ServerAliveCountMax=3",
+		"-o", "StrictHostKeyChecking=accept-new",
+	}
+	for _, port := range c.localPorts {
+		args = append(args, "-L", fmt.Sprintf("0.0.0.0:%d:localhost:%d", port, port))
+	}
+	args = append(args, c.host)
+
+	c.localCmd = exec.Command("ssh", args...)
+	c.localCmd.Stderr = nil
+	if err := c.localCmd.Start(); err != nil {
+		return fmt.Errorf("local forward ssh start: %w", err)
+	}
+	return nil
+}
+
+func (c *Connection) stopLocalForwards() {
+	if c.localCmd != nil && c.localCmd.Process != nil {
+		c.localCmd.Process.Kill()
+		c.localCmd.Wait()
+		c.localCmd = nil
+	}
 }
 
 func (c *Connection) IsAlive() bool {
@@ -115,6 +148,7 @@ func (c *Connection) Stop() error {
 	}
 	c.stopped = true
 	close(c.stopCh)
+	c.stopLocalForwards()
 	os.Remove(c.cfg.Connection.ControlSocket + ".host")
 
 	cmd := exec.Command("ssh",
@@ -267,6 +301,7 @@ func (c *Connection) watchAndReconnect() {
 }
 
 func (c *Connection) reconnect() error {
+	c.stopLocalForwards()
 	os.Remove(c.cfg.Connection.ControlSocket)
 
 	args := []string{
@@ -285,9 +320,6 @@ func (c *Connection) reconnect() error {
 		}
 		args = append(args, "-R", fmt.Sprintf("%d:localhost:%d", remotePort, port))
 	}
-	for _, port := range c.localPorts {
-		args = append(args, "-L", fmt.Sprintf("0.0.0.0:%d:localhost:%d", port, port))
-	}
 	args = append(args, c.host)
 
 	c.cmd = exec.Command("ssh", args...)
@@ -300,6 +332,7 @@ func (c *Connection) reconnect() error {
 	for i := 0; i < 30; i++ {
 		time.Sleep(200 * time.Millisecond)
 		if c.IsAlive() {
+			c.startLocalForwards()
 			return nil
 		}
 	}
