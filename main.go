@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -12,7 +13,23 @@ import (
 
 var version = "dev"
 
+func raiseFileLimit() {
+	var lim syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
+		return
+	}
+	if lim.Cur < 65536 {
+		lim.Cur = 65536
+		if lim.Max < 65536 {
+			lim.Max = 65536
+		}
+		syscall.Setrlimit(syscall.RLIMIT_NOFILE, &lim)
+	}
+}
+
 func main() {
+	raiseFileLimit()
+
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)
