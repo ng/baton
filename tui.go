@@ -862,8 +862,12 @@ func (m model) renderRemotePorts(width, height int) string {
 		if desc == "" {
 			desc = "preset"
 		}
+		pin := ""
+		if p.Pinned {
+			pin = " \U0001F4CC"
+		}
 
-		line := fmt.Sprintf("%s  %s", port, dimStyle.Render(desc))
+		line := fmt.Sprintf("%s%s  %s", port, pin, dimStyle.Render(desc))
 		if focused && i == m.portSelected {
 			lines = append(lines, portStyle.Render(headerStyle.Render("▸ ")+line))
 		} else {

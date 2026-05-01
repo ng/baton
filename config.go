@@ -98,12 +98,14 @@ func DefaultConfig() *Config {
 
 func LoadConfig() (*Config, error) {
 	cfg := DefaultConfig()
+	defaults := DefaultConfig()
 
 	localPath := ".baton.toml"
 	if data, err := os.ReadFile(localPath); err == nil {
 		if err := toml.Unmarshal(data, cfg); err != nil {
 			return nil, fmt.Errorf("parsing %s: %w", localPath, err)
 		}
+		mergePresetDefaults(cfg, defaults)
 		if cfg.Transfer.MacUser == "" {
 			cfg.Transfer.MacUser = os.Getenv("USER")
 		}
@@ -124,12 +126,29 @@ func LoadConfig() (*Config, error) {
 	if err := toml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
+	mergePresetDefaults(cfg, defaults)
 
 	if cfg.Transfer.MacUser == "" {
 		cfg.Transfer.MacUser = os.Getenv("USER")
 	}
 
 	return cfg, nil
+}
+
+func mergePresetDefaults(cfg, defaults *Config) {
+	for name, def := range defaults.Presets {
+		p, ok := cfg.Presets[name]
+		if !ok {
+			continue
+		}
+		if p.Labels == nil {
+			p.Labels = def.Labels
+		}
+		if p.Ports == nil {
+			p.Ports = def.Ports
+		}
+		cfg.Presets[name] = p
+	}
 }
 
 func WriteDefaultConfig(path string) error {

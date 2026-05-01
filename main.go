@@ -138,7 +138,7 @@ func runConnect(cfg *Config, host, preset string) {
 				remotePort = 4443
 			}
 			label := cfg.PortLabel(preset, port)
-			reverseInfos = append(reverseInfos, PortInfo{Port: remotePort, Label: label})
+			reverseInfos = append(reverseInfos, PortInfo{Port: remotePort, Label: label, Pinned: true})
 			reverseRemotePorts = append(reverseRemotePorts, remotePort)
 		}
 
