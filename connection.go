@@ -131,9 +131,27 @@ func (c *Connection) Stop() error {
 	return nil
 }
 
+// RunRemote executes a command on the remote host via the control socket.
+// This contends with forwarded data channels; prefer RunRemoteDirect for
+// periodic monitoring commands.
 func (c *Connection) RunRemote(command string) ([]byte, error) {
 	cmd := exec.Command("ssh",
 		"-S", c.cfg.Connection.ControlSocket,
+		c.host,
+		command,
+	)
+	return cmd.Output()
+}
+
+// RunRemoteDirect executes a command on the remote host over a fresh SSH
+// connection that bypasses the ControlMaster socket entirely. Use this for
+// periodic monitoring (throughput sampling, port scanning) so that control
+// socket traffic does not stall forwarded data channels under high concurrency.
+func (c *Connection) RunRemoteDirect(command string) ([]byte, error) {
+	cmd := exec.Command("ssh",
+		"-o", "ControlPath=none",
+		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "ConnectTimeout=5",
 		c.host,
 		command,
 	)
@@ -193,7 +211,7 @@ func (c *Connection) AutoReconnect() bool {
 }
 
 func (c *Connection) watchAndReconnect() {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
 	for {

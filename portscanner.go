@@ -193,7 +193,7 @@ func parseLine(line string) (port int, process string, ok bool) {
 }
 
 func (ps *PortScanner) scan() {
-	output, err := ps.conn.RunRemote("ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null")
+	output, err := ps.conn.RunRemoteDirect("ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null")
 	if err != nil {
 		return
 	}

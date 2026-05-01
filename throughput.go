@@ -77,7 +77,7 @@ func (tm *ThroughputMonitor) Stop() {
 }
 
 func (tm *ThroughputMonitor) sample() {
-	output, err := tm.conn.RunRemote("cat /proc/net/dev 2>/dev/null; echo '---SPLIT---'; ss -t -i 2>/dev/null")
+	output, err := tm.conn.RunRemoteDirect("cat /proc/net/dev 2>/dev/null; echo '---SPLIT---'; ss -t -i 2>/dev/null")
 	if err != nil {
 		tm.failed = true
 		return
