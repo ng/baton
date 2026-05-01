@@ -18,11 +18,12 @@ func raiseFileLimit() {
 	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
 		return
 	}
-	if lim.Cur < 65536 {
-		lim.Cur = 65536
-		if lim.Max < 65536 {
-			lim.Max = 65536
-		}
+	target := uint64(65536)
+	if lim.Max > 0 && lim.Max < target {
+		target = lim.Max
+	}
+	if lim.Cur < target {
+		lim.Cur = target
 		syscall.Setrlimit(syscall.RLIMIT_NOFILE, &lim)
 	}
 }
