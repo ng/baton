@@ -8,16 +8,17 @@ import (
 )
 
 type ThroughputMonitor struct {
-	conn      *Connection
-	interval  time.Duration
-	events    chan ThroughputMsg
+	conn       *Connection
+	interval   time.Duration
+	enabled    bool
+	events     chan ThroughputMsg
 	portEvents chan PortTrafficMsg
-	stopCh    chan struct{}
-	lastRx    uint64
-	lastTx    uint64
-	lastTime  time.Time
-	lastPorts map[int]portBytes
-	failed    bool
+	stopCh     chan struct{}
+	lastRx     uint64
+	lastTx     uint64
+	lastTime   time.Time
+	lastPorts  map[int]portBytes
+	failed     bool
 }
 
 type portBytes struct {
@@ -50,6 +51,11 @@ func (tm *ThroughputMonitor) PortEvents() <-chan PortTrafficMsg {
 }
 
 func (tm *ThroughputMonitor) Run() {
+	if !tm.enabled {
+		<-tm.stopCh
+		return
+	}
+
 	tm.sample()
 
 	ticker := time.NewTicker(tm.interval)

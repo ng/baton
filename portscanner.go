@@ -11,15 +11,16 @@ import (
 )
 
 type PortScanner struct {
-	cfg      *Config
-	conn     *Connection
-	preset   string
-	mu       sync.RWMutex
-	active   map[int]PortInfo
-	excluded map[int]bool
-	pinned   map[int]bool
-	stopCh   chan struct{}
-	events   chan PortEventMsg
+	cfg         *Config
+	conn        *Connection
+	preset      string
+	mu          sync.RWMutex
+	active      map[int]PortInfo
+	excluded    map[int]bool
+	pinned      map[int]bool
+	scanEnabled bool
+	stopCh      chan struct{}
+	events      chan PortEventMsg
 }
 
 // ssRe captures port and optional process name from ss -tlnp output.
@@ -96,8 +97,20 @@ func (ps *PortScanner) forwardPinned() {
 	}
 }
 
+func (ps *PortScanner) SetScanEnabled(on bool) {
+	ps.mu.Lock()
+	ps.scanEnabled = on
+	ps.mu.Unlock()
+}
+
 func (ps *PortScanner) Run() {
 	ps.forwardPinned()
+
+	if !ps.scanEnabled {
+		<-ps.stopCh
+		return
+	}
+
 	ps.scan()
 
 	ticker := time.NewTicker(ps.cfg.Ports.ScanInterval.Duration)
