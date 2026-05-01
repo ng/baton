@@ -61,10 +61,6 @@ func (c *Connection) Start() error {
 		return fmt.Errorf("already connected")
 	}
 
-	if err := c.ensureInbox(); err != nil {
-		c.sendEvent(fmt.Sprintf("warning: could not create inbox: %v", err))
-	}
-
 	args := c.buildSSHArgs()
 	c.cmd = exec.Command("ssh", args...)
 	c.cmd.Stderr = nil
@@ -79,9 +75,6 @@ func (c *Connection) Start() error {
 			c.StartTime = time.Now()
 			os.WriteFile(c.cfg.Connection.ControlSocket+".host", []byte(c.host), 0644)
 			c.sendEvent("connected to " + c.host)
-			if err := c.startMonitor(); err != nil {
-				c.sendEvent(fmt.Sprintf("warning: monitor connection failed: %v", err))
-			}
 			go c.watchAndReconnect()
 			return nil
 		}
@@ -94,11 +87,9 @@ func (c *Connection) Start() error {
 func (c *Connection) buildSSHArgs() []string {
 	args := []string{
 		"-N",
-		"-o", "ControlPath=none",
 		"-o", "ServerAliveInterval=15",
 		"-o", "ServerAliveCountMax=3",
 		"-o", "StrictHostKeyChecking=accept-new",
-		"-R", fmt.Sprintf("%d:localhost:22", c.cfg.Connection.ReversePort),
 	}
 	for _, port := range c.reversePorts {
 		remotePort := port
@@ -435,7 +426,6 @@ func (c *Connection) reconnect() error {
 	for i := 0; i < 30; i++ {
 		time.Sleep(200 * time.Millisecond)
 		if c.IsAlive() {
-			c.startMonitor()
 			return nil
 		}
 	}

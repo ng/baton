@@ -87,8 +87,6 @@ func runDaemon(cfg *Config, host, preset string) {
 		}
 
 		scanner.AddExclusions(reverseRemotePorts)
-		go scanner.Run()
-		go throughput.Run()
 
 		t := true
 		emit(DaemonEvent{

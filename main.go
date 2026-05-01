@@ -166,8 +166,6 @@ func runConnect(cfg *Config, host, preset string) {
 		}
 
 		scanner.AddExclusions(reverseRemotePorts)
-		go scanner.Run()
-		go throughput.Run()
 
 		p.Send(connectResultMsg{
 			reverseInfos: reverseInfos,
