@@ -59,7 +59,7 @@ func NewPortScanner(cfg *Config, conn *Connection, extraPorts []int, reverseRemo
 		active:      make(map[int]PortInfo),
 		excluded:    excluded,
 		pinned:      pinned,
-		scanEnabled: true,
+		scanEnabled: false,
 		stopCh:      make(chan struct{}),
 		events:      make(chan PortEventMsg, 32),
 	}

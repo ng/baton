@@ -35,7 +35,7 @@ func NewThroughputMonitor(conn *Connection, interval time.Duration) *ThroughputM
 	return &ThroughputMonitor{
 		conn:       conn,
 		interval:   interval,
-		enabled:    true,
+		enabled:    false,
 		events:     make(chan ThroughputMsg, 32),
 		portEvents: make(chan PortTrafficMsg, 32),
 		stopCh:     make(chan struct{}),
