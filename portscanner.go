@@ -83,7 +83,8 @@ func (ps *PortScanner) forwardPinned() {
 	defer ps.mu.Unlock()
 	for port := range ps.pinned {
 		label := ps.cfg.PortLabel(ps.preset, port)
-		ps.conn.Forward(port, port)
+		// Pinned ports are already baked into the initial SSH command as -L flags,
+		// so we only register them here without calling conn.Forward() again.
 		ps.active[port] = PortInfo{Port: port, Label: label, Pinned: true}
 		ps.saveState()
 		ps.sendEvent(PortEventMsg{
@@ -217,6 +218,7 @@ func (ps *PortScanner) scan() {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 
+	var toForward []PortInfo
 	for port, info := range discovered {
 		if existing, exists := ps.active[port]; exists {
 			if existing.Stale {
@@ -228,17 +230,26 @@ func (ps *PortScanner) scan() {
 		if label := ps.cfg.PortLabel(ps.preset, port); label != "" {
 			info.Label = label
 		}
-		if err := ps.conn.Forward(port, port); err == nil {
-			ps.active[port] = info
+		toForward = append(toForward, info)
+	}
+	ps.mu.Unlock()
+
+	for _, info := range toForward {
+		if err := ps.conn.Forward(info.Port, info.Port); err == nil {
+			ps.mu.Lock()
+			ps.active[info.Port] = info
 			ps.saveState()
 			ps.sendEvent(PortEventMsg{
 				Time:    time.Now(),
-				Port:    port,
+				Port:    info.Port,
 				Process: info.Process,
 				Action:  "forwarded",
 			})
+			ps.mu.Unlock()
+			time.Sleep(100 * time.Millisecond)
 		}
 	}
+	ps.mu.Lock()
 
 	for port, info := range ps.active {
 		if ps.pinned[port] {
