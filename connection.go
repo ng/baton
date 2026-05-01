@@ -75,6 +75,9 @@ func (c *Connection) Start() error {
 			c.StartTime = time.Now()
 			os.WriteFile(c.cfg.Connection.ControlSocket+".host", []byte(c.host), 0644)
 			c.sendEvent("connected to " + c.host)
+			if err := c.startMonitor(); err != nil {
+				c.sendEvent(fmt.Sprintf("warning: monitor connection failed: %v", err))
+			}
 			go c.watchAndReconnect()
 			return nil
 		}
@@ -426,6 +429,7 @@ func (c *Connection) reconnect() error {
 	for i := 0; i < 30; i++ {
 		time.Sleep(200 * time.Millisecond)
 		if c.IsAlive() {
+			c.startMonitor()
 			return nil
 		}
 	}
