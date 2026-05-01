@@ -53,14 +53,15 @@ func NewPortScanner(cfg *Config, conn *Connection, extraPorts []int, reverseRemo
 	}
 	pinned := make(map[int]bool)
 	ps := &PortScanner{
-		cfg:      cfg,
-		conn:     conn,
-		preset:   preset,
-		active:   make(map[int]PortInfo),
-		excluded: excluded,
-		pinned:   pinned,
-		stopCh:   make(chan struct{}),
-		events:   make(chan PortEventMsg, 32),
+		cfg:         cfg,
+		conn:        conn,
+		preset:      preset,
+		active:      make(map[int]PortInfo),
+		excluded:    excluded,
+		pinned:      pinned,
+		scanEnabled: true,
+		stopCh:      make(chan struct{}),
+		events:      make(chan PortEventMsg, 32),
 	}
 	for _, port := range extraPorts {
 		if excluded[port] {

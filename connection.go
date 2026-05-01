@@ -18,7 +18,6 @@ type Connection struct {
 	host          string
 	cmd           *exec.Cmd
 	dynamicFwds   map[string]*exec.Cmd
-	monCmd        *exec.Cmd
 	monStdin      io.WriteCloser
 	monReader     *bufio.Reader
 	monMu         sync.Mutex
@@ -65,9 +64,21 @@ func (c *Connection) Start() error {
 	c.cmd = exec.Command("ssh", args...)
 	c.cmd.Stderr = nil
 
+	stdin, err := c.cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("ssh stdin pipe: %w", err)
+	}
+	stdout, err := c.cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("ssh stdout pipe: %w", err)
+	}
+
 	if err := c.cmd.Start(); err != nil {
 		return fmt.Errorf("ssh start: %w", err)
 	}
+
+	c.monStdin = stdin
+	c.monReader = bufio.NewReaderSize(stdout, 1024*1024)
 
 	for i := 0; i < 30; i++ {
 		time.Sleep(200 * time.Millisecond)
@@ -75,9 +86,6 @@ func (c *Connection) Start() error {
 			c.StartTime = time.Now()
 			os.WriteFile(c.cfg.Connection.ControlSocket+".host", []byte(c.host), 0644)
 			c.sendEvent("connected to " + c.host)
-			if err := c.startMonitor(); err != nil {
-				c.sendEvent(fmt.Sprintf("warning: monitor connection failed: %v", err))
-			}
 			go c.watchAndReconnect()
 			return nil
 		}
@@ -89,7 +97,6 @@ func (c *Connection) Start() error {
 
 func (c *Connection) buildSSHArgs() []string {
 	args := []string{
-		"-N",
 		"-o", "ServerAliveInterval=15",
 		"-o", "ServerAliveCountMax=3",
 		"-o", "StrictHostKeyChecking=accept-new",
@@ -104,51 +111,20 @@ func (c *Connection) buildSSHArgs() []string {
 	for _, port := range c.localPorts {
 		args = append(args, "-L", fmt.Sprintf("0.0.0.0:%d:localhost:%d", port, port))
 	}
-	args = append(args, c.host)
+	args = append(args, c.host, "exec bash -s")
 	return args
-}
-
-func (c *Connection) startMonitor() error {
-	cmd := exec.Command("ssh",
-		"-o", "ControlPath=none",
-		"-o", "ServerAliveInterval=15",
-		"-o", "ServerAliveCountMax=3",
-		"-o", "StrictHostKeyChecking=accept-new",
-		c.host,
-		"exec bash -s",
-	)
-	cmd.Stderr = nil
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return err
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	c.monCmd = cmd
-	c.monStdin = stdin
-	c.monReader = bufio.NewReaderSize(stdout, 1024*1024)
-	return nil
 }
 
 func (c *Connection) stopMonitor() {
 	if c.monStdin != nil {
 		c.monStdin.Close()
+		c.monStdin = nil
 	}
-	if c.monCmd != nil && c.monCmd.Process != nil {
-		c.monCmd.Process.Kill()
-		c.monCmd.Wait()
-		c.monCmd = nil
-	}
+	c.monReader = nil
 }
 
 func (c *Connection) monitorAlive() bool {
-	return c.monCmd != nil && c.monCmd.Process != nil &&
-		c.monCmd.Process.Signal(syscall.Signal(0)) == nil
+	return c.monStdin != nil && c.monReader != nil && c.IsAlive()
 }
 
 func (c *Connection) IsAlive() bool {
@@ -422,14 +398,25 @@ func (c *Connection) reconnect() error {
 	c.cmd = exec.Command("ssh", args...)
 	c.cmd.Stderr = nil
 
+	stdin, err := c.cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	stdout, err := c.cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+
 	if err := c.cmd.Start(); err != nil {
 		return err
 	}
 
+	c.monStdin = stdin
+	c.monReader = bufio.NewReaderSize(stdout, 1024*1024)
+
 	for i := 0; i < 30; i++ {
 		time.Sleep(200 * time.Millisecond)
 		if c.IsAlive() {
-			c.startMonitor()
 			return nil
 		}
 	}
