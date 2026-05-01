@@ -246,7 +246,6 @@ func (ps *PortScanner) scan() {
 				Action:  "forwarded",
 			})
 			ps.mu.Unlock()
-			time.Sleep(100 * time.Millisecond)
 		}
 	}
 	ps.mu.Lock()
