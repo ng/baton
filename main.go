@@ -43,7 +43,7 @@ func main() {
 	}
 
 	switch os.Args[1] {
-	case "connect":
+	case "connect", "daemon":
 		host := cfg.Connection.Host
 		preset := cfg.Connection.Preset
 		args := os.Args[2:]
@@ -56,7 +56,7 @@ func main() {
 			}
 		}
 		if host == "" {
-			fmt.Fprintln(os.Stderr, "usage: baton connect <host> [--preset <name>]")
+			fmt.Fprintf(os.Stderr, "usage: baton %s <host> [--preset <name>]\n", os.Args[1])
 			os.Exit(1)
 		}
 		restored := len(os.Args) < 3 && cfg.Connection.Host != ""
@@ -68,7 +68,11 @@ func main() {
 			fmt.Fprintln(os.Stderr)
 		}
 		cfg.SaveSession(host, preset)
-		runConnect(cfg, host, preset)
+		if os.Args[1] == "daemon" {
+			runDaemon(cfg, host, preset)
+		} else {
+			runConnect(cfg, host, preset)
+		}
 
 	case "send":
 		if len(os.Args) < 3 {
@@ -111,6 +115,7 @@ func printUsage() {
 
 Usage:
   baton connect <host> [--preset <name>]   Start SSH connection with TUI dashboard
+  baton daemon  <host> [--preset <name>]   Headless mode (NDJSON on stdout, commands on stdin)
   baton send <file> [dest]                 Upload file to remote
   baton ports                              List forwarded ports
   baton presets                            List available port presets

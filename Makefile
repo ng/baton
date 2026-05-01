@@ -1,4 +1,4 @@
-.PHONY: build build-mac build-mac-intel build-linux build-tray build-all test clean install-remote
+.PHONY: build build-mac build-mac-intel build-linux build-tray build-tray-go build-all test clean install-remote
 
 BINARY := baton
 VERSION := 0.1.0
@@ -13,8 +13,12 @@ build-mac-intel:
 build-linux:
 	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BINARY)-linux-amd64 .
 
-build-tray:
+build-tray-go:
 	GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 go build $(LDFLAGS) -o $(BINARY)-tray-darwin-arm64 ./cmd/baton-tray/
+
+build-tray:
+	cd BatonTray && swift build -c release
+	cp -f BatonTray/.build/release/BatonTray ./BatonTray.app 2>/dev/null || true
 
 build: build-mac
 
@@ -25,6 +29,8 @@ test:
 
 clean:
 	rm -f $(BINARY)-*
+	rm -f BatonTray.app
+	rm -rf BatonTray/.build
 
 install-remote:
 	@echo "Installing remote shell integration..."
