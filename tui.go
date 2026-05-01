@@ -555,6 +555,11 @@ func (m model) updatePortFocus(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.disconnectSelectedPort()
 	case "c":
 		return m.sweepStalePorts()
+	case "t":
+		return m, func() tea.Msg {
+			exec.Command("baton-tray").Start()
+			return nil
+		}
 	case "q", "ctrl+c":
 		return m, tea.Quit
 	}
